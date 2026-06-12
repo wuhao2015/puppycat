@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><style>{{ css }}</style></head>
+<body>
+  <h1>{{ itinerary.destination }}</h1>
+  <p class="muted">{{ itinerary.start_date }} &ndash; {{ itinerary.end_date }}</p>
+
+  {% if itinerary.warnings %}
+  <h2>Trip notices</h2>
+  {% for w in itinerary.warnings %}
+    <div class="warning {{ w.severity.value if w.severity.value is defined else w.severity }}">
+      &bull; {{ w.message }}{% if w.source %} <span class="muted">({{ w.source }})</span>{% endif %}
+    </div>
+  {% endfor %}
+  {% endif %}
+
+  {% for day in itinerary.days %}
+  <h2>{{ day.title or day.date }} <span class="muted">{{ day.date }}</span></h2>
+  {% if day.weather and day.weather.summary %}
+    <p class="weather">Weather: {{ day.weather.summary }}
+      {% if day.weather.temp_min_c is not none %}({{ day.weather.temp_min_c }}&deg;C&ndash;{{ day.weather.temp_max_c }}&deg;C){% endif %}
+      {% if day.weather.precipitation_mm %}, {{ day.weather.precipitation_mm }}mm rain{% endif %}
+    </p>
+  {% endif %}
+  {% if day.summary %}<p>{{ day.summary }}</p>{% endif %}
+
+  {% for item in day.items %}
+    <div class="item">
+      <div>
+        {% if item.start_time %}<span class="time">{{ item.start_time }}{% if item.end_time %}&ndash;{{ item.end_time }}{% endif %}</span> &middot; {% endif %}
+        <strong>{{ item.name }}</strong>
+        {% if item.category %}<span class="muted">&middot; {{ item.category }}</span>{% endif %}
+      </div>
+      {% if item.description %}<div>{{ item.description }}</div>{% endif %}
+      {% if item.address %}<div class="muted">{{ item.address }}</div>{% endif %}
+      {% if item.reservation_url %}<div><a href="{{ item.reservation_url }}">Reserve / official page</a></div>{% endif %}
+      {% for w in item.warnings %}
+        <div class="warning {{ w.severity.value if w.severity.value is defined else w.severity }}">&#9888; {{ w.message }}</div>
+      {% endfor %}
+    </div>
+  {% endfor %}
+  {% endfor %}
+
+  <div class="disclaimer">{{ itinerary.disclaimer }}</div>
+</body>
+</html>

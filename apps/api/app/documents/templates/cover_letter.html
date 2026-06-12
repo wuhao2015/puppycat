@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><style>{{ css }}</style></head>
+<body>
+  <p class="muted">{{ today }}</p>
+  <p>{{ req.addressed_to or "To the Visa Officer" }}</p>
+
+  <h1>Cover letter &mdash; visa application</h1>
+
+  <p>Dear Sir or Madam,</p>
+
+  <p>
+    I, <strong>{{ req.applicant_name }}</strong>, holder of a {{ req.passport_country }} passport
+    {% if req.passport_number %}(number {{ req.passport_number }}){% endif %},
+    am writing to apply for a {{ req.purpose }} visa to {{ req.destination_country }}.
+    I intend to travel from <strong>{{ req.start_date }}</strong> to <strong>{{ req.end_date }}</strong>.
+  </p>
+
+  {% if req.notes %}<p>{{ req.notes }}</p>{% endif %}
+
+  {% if req.itinerary and req.itinerary.days %}
+  <h2>Planned itinerary</h2>
+  {% for day in req.itinerary.days %}
+    <h3>{{ day.date }}{% if day.title %} &mdash; {{ day.title }}{% endif %}</h3>
+    <ul>
+      {% for item in day.items %}
+        <li>{% if item.start_time %}{{ item.start_time }} &middot; {% endif %}{{ item.name }}{% if item.address %} <span class="muted">({{ item.address }})</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  {% endfor %}
+  {% endif %}
+
+  <p>
+    I confirm that I will respect the conditions of my visa and will return to my country of
+    residence before its expiry. I have attached the supporting documents required for this
+    application.
+  </p>
+
+  <p>Thank you for considering my application.</p>
+  <p>Sincerely,<br><br>{{ req.applicant_name }}</p>
+
+  <div class="disclaimer">
+    This letter was generated as a starting template. Review and adapt it to your circumstances
+    and confirm requirements with the relevant embassy or consulate before submitting.
+  </div>
+</body>
+</html>

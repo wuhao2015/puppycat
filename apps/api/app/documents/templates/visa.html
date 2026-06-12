@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><style>{{ css }}</style></head>
+<body>
+  <h1>Visa checklist</h1>
+  <p class="muted">{{ checklist.passport_country }} passport &rarr; {{ checklist.destination_country }}</p>
+
+  <table>
+    <tr><th>Visa required</th><td>
+      {% if checklist.visa_required is none %}Unknown{% elif checklist.visa_required %}Yes{% else %}No{% endif %}
+    </td></tr>
+    {% if checklist.visa_type %}<tr><th>Visa type</th><td>{{ checklist.visa_type }}</td></tr>{% endif %}
+    {% if checklist.allowed_stay %}<tr><th>Allowed stay</th><td>{{ checklist.allowed_stay }}</td></tr>{% endif %}
+    {% if checklist.processing_time %}<tr><th>Processing time</th><td>{{ checklist.processing_time }}</td></tr>{% endif %}
+    {% if checklist.fees %}<tr><th>Fees</th><td>{{ checklist.fees }}</td></tr>{% endif %}
+  </table>
+
+  {% if checklist.documents %}
+  <h2>Required documents</h2>
+  <table>
+    <tr><th>Document</th><th>Required</th><th>Detail</th></tr>
+    {% for d in checklist.documents %}
+    <tr><td>{{ d.name }}</td><td>{{ "Yes" if d.required else "Optional" }}</td><td>{{ d.detail or "" }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
+
+  {% if checklist.steps %}
+  <h2>Application steps</h2>
+  <ol>{% for s in checklist.steps %}<li>{{ s }}</li>{% endfor %}</ol>
+  {% endif %}
+
+  {% if checklist.official_links %}
+  <h2>Official links</h2>
+  <ul>{% for link in checklist.official_links %}<li><a href="{{ link }}">{{ link }}</a></li>{% endfor %}</ul>
+  {% endif %}
+
+  <div class="disclaimer">{{ checklist.disclaimer }}</div>
+</body>
+</html>

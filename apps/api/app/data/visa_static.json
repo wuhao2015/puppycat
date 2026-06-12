@@ -1,0 +1,47 @@
+{
+  "_comment": "Curated, advisory-only visa data keyed as '<passport_iso>:<destination_iso>'. Used as a fallback / grounding hint when live web search is unavailable. Always verify with official sources.",
+  "US:JP": {
+    "visa_required": false,
+    "visa_type": "Visa exemption (short stay)",
+    "allowed_stay": "Up to 90 days for tourism",
+    "processing_time": "N/A (visa-free)",
+    "fees": "None for visa-free entry",
+    "documents": [
+      {"name": "Passport valid for duration of stay", "required": true},
+      {"name": "Return or onward ticket", "required": true},
+      {"name": "Proof of sufficient funds", "required": false}
+    ],
+    "official_links": ["https://www.mofa.go.jp/j_info/visit/visa/short/novisa.html"]
+  },
+  "US:FR": {
+    "visa_required": false,
+    "visa_type": "Schengen visa exemption (short stay)",
+    "allowed_stay": "Up to 90 days within any 180-day period",
+    "processing_time": "N/A (visa-free); ETIAS authorisation expected to be required",
+    "fees": "None for visa-free entry (ETIAS fee when in force)",
+    "documents": [
+      {"name": "Passport valid 3+ months beyond departure", "required": true},
+      {"name": "Proof of accommodation", "required": true},
+      {"name": "Return ticket", "required": true},
+      {"name": "Travel insurance", "required": false}
+    ],
+    "official_links": ["https://france-visas.gouv.fr/en/"]
+  },
+  "CN:JP": {
+    "visa_required": true,
+    "visa_type": "Single-entry tourist visa",
+    "allowed_stay": "Up to 15-30 days depending on visa",
+    "processing_time": "About 4-6 business days",
+    "fees": "Approximately USD 25-30 (varies)",
+    "documents": [
+      {"name": "Passport valid 6+ months", "required": true},
+      {"name": "Completed visa application form", "required": true},
+      {"name": "Recent passport photo", "required": true},
+      {"name": "Flight itinerary (round trip)", "required": true},
+      {"name": "Hotel reservations / itinerary", "required": true},
+      {"name": "Proof of financial means (bank statements)", "required": true},
+      {"name": "Employment certificate", "required": false}
+    ],
+    "official_links": ["https://www.mofa.go.jp/j_info/visit/visa/"]
+  }
+}
