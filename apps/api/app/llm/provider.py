@@ -21,10 +21,26 @@ class ModelTier(str, enum.Enum):
 
 
 # Rough per-1M-token USD prices used only for budget estimation, not billing.
-# Keyed by model name; unknown models fall back to a conservative default.
-_PRICE_PER_1M = {
+# Models marked $0 are free on AI Studio up to their daily quota (typically
+# 1,500 RPD for Flash models). Pro models became paid-only in April 2026.
+_PRICE_PER_1M: dict[str, tuple[float, float]] = {
+    # OpenAI
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
+    # Gemini 2.0 — free
+    "gemini-2.0-flash": (0.0, 0.0),
+    "gemini-2.0-flash-lite": (0.0, 0.0),
+    # Gemini 2.5 — Flash free (1,500 RPD), Pro paid-only / 50 RPD
+    "gemini-2.5-flash": (0.0, 0.0),
+    "gemini-2.5-flash-lite": (0.0, 0.0),
+    "gemini-2.5-flash-preview": (0.0, 0.0),
+    "gemini-2.5-pro": (1.25, 10.00),        # effectively paid (50 RPD free)
+    # Gemini 3 — Flash free, Pro paid
+    "gemini-3-flash": (0.0, 0.0),
+    "gemini-3.1-flash-lite": (0.0, 0.0),
+    "gemini-3.1-pro-preview": (2.00, 12.00),
+    # Gemini 3.5 — Flash free
+    "gemini-3.5-flash": (0.0, 0.0),
 }
 _DEFAULT_PRICE = (2.50, 10.00)
 
@@ -179,8 +195,142 @@ class OpenAIProvider(LLMProvider):
             )
 
 
+class GeminiProvider(LLMProvider):
+    """Google Gemini via the `google-genai` SDK.
+
+    Works with Google AI Studio (free tier) using GEMINI_API_KEY.
+    Message format is converted from the OpenAI-style dicts the pipeline uses
+    so callers never need to know which provider is active.
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        if not settings.gemini_api_key:
+            raise ConfigurationError("GEMINI_API_KEY is not set.")
+        from google import genai
+
+        self._client = genai.Client(api_key=settings.gemini_api_key)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _convert_messages(
+        messages: list[dict[str, Any]],
+    ) -> tuple[str, list[dict[str, Any]]]:
+        """Split OpenAI-format messages into (system_instruction, contents).
+
+        Gemini takes system instructions separately and uses "model" instead
+        of "assistant" for the assistant role.
+        """
+        system_parts: list[str] = []
+        contents: list[dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role", "user")
+            text = m.get("content") or ""
+            if role == "system":
+                system_parts.append(text)
+            else:
+                contents.append(
+                    {
+                        "role": "model" if role == "assistant" else "user",
+                        "parts": [{"text": text}],
+                    }
+                )
+        return "\n\n".join(system_parts), contents
+
+    def _base_config(self, temperature: float, json_mode: bool = False) -> dict[str, Any]:
+        from google.genai import types
+
+        kwargs: dict[str, Any] = {"temperature": temperature}
+        if json_mode:
+            kwargs["response_mime_type"] = "application/json"
+        return {"config": types.GenerateContentConfig(**kwargs)}
+
+    def _record_usage(self, model: str, resp: Any) -> None:
+        usage = getattr(resp, "usage_metadata", None)
+        if usage is not None:
+            self.budget.record(
+                model,
+                getattr(usage, "prompt_token_count", 0) or 0,
+                getattr(usage, "candidates_token_count", 0) or 0,
+            )
+
+    # ------------------------------------------------------------------
+    # LLMProvider interface
+    # ------------------------------------------------------------------
+
+    async def complete(
+        self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.4
+    ) -> str:
+        self.budget.check()
+        model = self.model_for(tier)
+        system, contents = self._convert_messages(messages)
+        from google.genai import types
+
+        cfg = types.GenerateContentConfig(
+            system_instruction=system or None,
+            temperature=temperature,
+        )
+        try:
+            resp = await self._client.aio.models.generate_content(
+                model=model, contents=contents, config=cfg
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise UpstreamUnavailableError(f"Gemini request failed: {exc}") from exc
+        self._record_usage(model, resp)
+        return resp.text or ""
+
+    async def complete_json(
+        self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.2
+    ) -> dict[str, Any]:
+        self.budget.check()
+        model = self.model_for(tier)
+        system, contents = self._convert_messages(messages)
+        from google.genai import types
+
+        cfg = types.GenerateContentConfig(
+            system_instruction=system or None,
+            temperature=temperature,
+            response_mime_type="application/json",
+        )
+        try:
+            resp = await self._client.aio.models.generate_content(
+                model=model, contents=contents, config=cfg
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise UpstreamUnavailableError(f"Gemini request failed: {exc}") from exc
+        self._record_usage(model, resp)
+        return json.loads(resp.text or "{}")
+
+    async def stream(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tier: ModelTier,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[str]:
+        self.budget.check()
+        model = self.model_for(tier)
+        system, contents = self._convert_messages(messages)
+        from google.genai import types
+
+        cfg = types.GenerateContentConfig(system_instruction=system or None)
+        try:
+            async for chunk in await self._client.aio.models.generate_content_stream(
+                model=model, contents=contents, config=cfg
+            ):
+                if chunk.text:
+                    yield chunk.text
+        except Exception as exc:  # noqa: BLE001
+            raise UpstreamUnavailableError(f"Gemini stream failed: {exc}") from exc
+
+
 def build_llm_provider(settings: Settings | None = None) -> LLMProvider:
     settings = settings or get_settings()
+    if settings.llm_provider == "gemini":
+        return GeminiProvider(settings)
     if settings.llm_provider == "openai":
         return OpenAIProvider(settings)
     raise ConfigurationError(f"Unknown LLM provider: {settings.llm_provider}")

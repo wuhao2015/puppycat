@@ -17,12 +17,18 @@ class Settings(BaseSettings):
     # Database
     database_url: str = "postgresql+asyncpg://puppycat:puppycat@localhost:5432/puppycat"
 
-    # LLM provider
-    llm_provider: str = "openai"
+    # LLM provider  ("gemini" or "openai")
+    llm_provider: str = "gemini"
+    # Gemini (Google AI Studio — free tier available)
+    gemini_api_key: str = ""
+    # Both Flash models are free on AI Studio (1,500 req/day).
+    # gemini-2.5-flash has thinking mode — great quality for synthesis.
+    # Pro models dropped to 50 RPD free in April 2026; avoid for free use.
+    llm_cheap_model: str = "gemini-2.5-flash"
+    llm_synthesis_model: str = "gemini-2.5-flash"
+    # OpenAI (kept as a fallback option)
     openai_api_key: str = ""
     openai_base_url: str = ""
-    llm_cheap_model: str = "gpt-4o-mini"
-    llm_synthesis_model: str = "gpt-4o"
 
     # Google Places
     google_places_api_key: str = ""

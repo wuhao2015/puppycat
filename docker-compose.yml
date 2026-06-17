@@ -22,7 +22,7 @@ services:
       # Override host so the container reaches the db service, not localhost.
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-puppycat}:${POSTGRES_PASSWORD:-puppycat}@db:5432/${POSTGRES_DB:-puppycat}
     ports:
-      - "8000:8000"
+      - "8001:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -31,10 +31,17 @@ services:
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
 
   web:
-    build: ./apps/web
+    build:
+      context: ./apps/web
+      args:
+        # The browser reaches the API via the host-published port (8001), since
+        # the API container's host mapping is 8001->8000. Hardcoded (not ${...})
+        # so a stale NEXT_PUBLIC_API_BASE_URL in .env cannot point it back at 8000.
+        # These are baked into the client bundle at build time.
+        NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
+        NEXT_PUBLIC_API_KEY: ${NEXT_PUBLIC_API_KEY:-dev-local-key}
+        NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
     env_file: .env
-    environment:
-      NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
     ports:
       - "3000:3000"
     depends_on:
