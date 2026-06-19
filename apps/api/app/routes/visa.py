@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 from pydantic import ValidationError
 
-from app.deps import Deps, get_deps, require_api_key
+from app.deps import Deps, get_current_user, get_deps
 from app.llm import ModelTier
 from app.schemas import DISCLAIMER, VisaChecklist, VisaRequest
 
@@ -49,7 +49,7 @@ def _static_hint(req: VisaRequest) -> dict | None:
 
 
 @router.post(
-    "/visa-checklist", response_model=VisaChecklist, dependencies=[Depends(require_api_key)]
+    "/visa-checklist", response_model=VisaChecklist, dependencies=[Depends(get_current_user)]
 )
 async def visa_checklist(
     req: VisaRequest, deps: Deps = Depends(get_deps)

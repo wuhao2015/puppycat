@@ -86,15 +86,24 @@ npm run dev
 
 ## API surface
 
-| Method | Path | Description |
-|---|---|---|
-| `POST` | `/api/itinerary` | Generate a verified day-by-day itinerary |
-| `POST` | `/api/visa-checklist` | Visa requirements + document checklist |
-| `POST` | `/api/chat` | Streaming conversational planner |
-| `POST` | `/api/documents/itinerary` | Render itinerary PDF |
-| `POST` | `/api/documents/visa` | Render visa checklist PDF |
-| `POST` | `/api/documents/cover-letter` | Render proof-of-travel / cover letter PDF |
-| `GET`  | `/health` | Liveness probe |
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `POST` | `/api/auth/register` | signup code | Create an account (invite-only) and receive a JWT |
+| `POST` | `/api/auth/login` | — | Exchange email + password for a JWT |
+| `GET`  | `/api/auth/me` | Bearer | Current authenticated user |
+| `POST` | `/api/itinerary` | Bearer | Generate a verified day-by-day itinerary |
+| `GET`  | `/api/trips` | Bearer | List the current user's saved trips |
+| `GET`  | `/api/itineraries/{id}` | Bearer | Fetch one of the user's saved itineraries |
+| `POST` | `/api/visa-checklist` | Bearer | Visa requirements + document checklist |
+| `POST` | `/api/chat` | Bearer | Streaming conversational planner |
+| `POST` | `/api/documents/itinerary` | Bearer | Render itinerary PDF |
+| `POST` | `/api/documents/visa` | Bearer | Render visa checklist PDF |
+| `POST` | `/api/documents/cover-letter` | Bearer | Render proof-of-travel / cover letter PDF |
+| `GET`  | `/health` | — | Liveness probe |
+
+All app endpoints require an `Authorization: Bearer <jwt>` header. Obtain a token via
+`/api/auth/register` (requires the shared `SIGNUP_CODE`) or `/api/auth/login`. Each user
+only sees their own trips and itineraries.
 
 Interactive docs are available at http://localhost:8000/docs once the backend is running.
 

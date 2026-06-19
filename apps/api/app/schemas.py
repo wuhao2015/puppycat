@@ -11,6 +11,33 @@ DISCLAIMER = (
 )
 
 
+# --- Auth -------------------------------------------------------------------
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    display_name: str | None = None
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str = Field(min_length=8, max_length=128)
+    display_name: str | None = None
+    signup_code: str
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    user: UserOut
+
+
 # --- Geography & places -----------------------------------------------------
 
 
@@ -124,6 +151,15 @@ class ItineraryResponse(BaseModel):
     trip_id: str
     itinerary_id: str
     itinerary: Itinerary
+
+
+class TripSummary(BaseModel):
+    trip_id: str
+    destination: str
+    start_date: str
+    end_date: str
+    created_at: str
+    itinerary_id: str | None = None
 
 
 # --- Visa -------------------------------------------------------------------

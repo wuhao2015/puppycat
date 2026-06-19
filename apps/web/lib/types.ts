@@ -113,3 +113,24 @@ export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
 }
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  display_name?: string | null;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user: AuthUser;
+}
+
+export interface TripSummary {
+  trip_id: string;
+  destination: string;
+  start_date: string;
+  end_date: string;
+  created_at: string;
+  itinerary_id?: string | null;
+}

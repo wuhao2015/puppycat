@@ -47,8 +47,14 @@ class Settings(BaseSettings):
     cache_ttl_weather: int = 10800
 
     # App
-    app_api_key: str = "dev-local-key"
     cors_allow_origins: str = "http://localhost:3000"
+
+    # Auth (JWT + invite-only registration)
+    jwt_secret: str = "dev-insecure-change-me"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 10080  # 7 days
+    # Shared invite code required to register. Anyone with it can create an account.
+    signup_code: str = "puppycat-invite"
 
     @property
     def cors_origins_list(self) -> list[str]:

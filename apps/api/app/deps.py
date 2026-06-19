@@ -3,13 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 from functools import lru_cache
 
-from fastapi import Header
+import jwt
+from fastapi import Depends, Header
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache import CacheBackend, build_cache
 from app.config import Settings, get_settings
 from app.datasources import PlacesClient, WeatherClient, WebSearchClient
+from app.db import get_session
 from app.errors import PuppycatError
 from app.llm import LLMProvider, build_llm_provider
+from app.models import User
+from app.security import decode_access_token
 
 
 class UnauthorizedError(PuppycatError):
@@ -42,8 +47,19 @@ def get_deps() -> Deps:
     )
 
 
-async def require_api_key(x_api_key: str | None = Header(default=None)) -> None:
-    """Single-user auth for v1. Replace with real auth when going multi-user."""
-    settings = get_settings()
-    if x_api_key != settings.app_api_key:
-        raise UnauthorizedError("Invalid or missing X-API-Key header.")
+async def get_current_user(
+    authorization: str | None = Header(default=None),
+    session: AsyncSession = Depends(get_session),
+) -> User:
+    """Resolve the authenticated user from a `Authorization: Bearer <jwt>` header."""
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise UnauthorizedError("Missing or malformed Authorization header.")
+    token = authorization.split(" ", 1)[1].strip()
+    try:
+        user_id = decode_access_token(token, get_settings())
+    except jwt.PyJWTError:
+        raise UnauthorizedError("Invalid or expired token.")
+    user = await session.get(User, user_id)
+    if user is None:
+        raise UnauthorizedError("User no longer exists.")
+    return user

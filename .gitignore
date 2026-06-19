@@ -1,7 +1,7 @@
 # Environment
 .env
 .env.local
-*.env
+*.env.old
 
 # Python
 __pycache__/
@@ -28,3 +28,7 @@ apps/web/lib/api-types.ts
 *.swp
 .idea/
 .vscode/
+.cursor/
+
+# Misc
+plans.md

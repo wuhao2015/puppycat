@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.deps import Deps, get_deps, require_api_key
+from app.deps import Deps, get_current_user, get_deps
 from app.llm import ModelTier
 from app.schemas import ChatRequest
 
@@ -48,7 +48,7 @@ async def _build_context(message: str, deps: Deps) -> str:
     return "\n".join(blocks) if blocks else "(no external context retrieved)"
 
 
-@router.post("/chat", dependencies=[Depends(require_api_key)])
+@router.post("/chat", dependencies=[Depends(get_current_user)])
 async def chat(req: ChatRequest, deps: Deps = Depends(get_deps)) -> StreamingResponse:
     last_user = next(
         (m.content for m in reversed(req.messages) if m.role == "user"), ""
