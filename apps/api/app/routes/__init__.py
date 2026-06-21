@@ -1,3 +1,3 @@
-from app.routes import chat, documents, itinerary, visa
+from app.routes import auth, chat, documents, trips
 
-__all__ = ["chat", "documents", "itinerary", "visa"]
+__all__ = ["auth", "chat", "documents", "trips"]

@@ -30,6 +30,9 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String, nullable=True)
     # bcrypt hash. Nullable so the seeded local user (no password) stays valid.
     password_hash: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Nationalities the user holds, as ISO country codes, used to ground visa advice.
+    passport_countries: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    home_country: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -42,12 +45,20 @@ class Trip(Base):
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
-    destination: Mapped[str] = mapped_column(String)
-    start_date: Mapped[str] = mapped_column(String)  # ISO date
-    end_date: Mapped[str] = mapped_column(String)  # ISO date
+    # Short label for the chat session / trip, shown in the sidebar.
+    title: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Nullable: a fresh chat session has no destination/dates until the plan is built.
+    destination: Mapped[str | None] = mapped_column(String, nullable=True)
+    start_date: Mapped[str | None] = mapped_column(String, nullable=True)  # ISO date
+    end_date: Mapped[str | None] = mapped_column(String, nullable=True)  # ISO date
     params: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    # Persisted chat history: list of {"role", "content", "ts"}.
+    messages: Mapped[list[Any]] = mapped_column(JSONB, default=list)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=_now
     )
 
     user: Mapped[User] = relationship(back_populates="trips")

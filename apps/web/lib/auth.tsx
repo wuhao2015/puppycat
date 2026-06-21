@@ -28,6 +28,7 @@ interface AuthState {
     signup_code: string;
   }) => Promise<void>;
   logout: () => void;
+  setUser: (user: AuthUser) => void;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
@@ -83,7 +84,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const value = useMemo(
-    () => ({ user, loading, login, register, logout }),
+    () => ({ user, loading, login, register, logout, setUser }),
     [user, loading, login, register, logout],
   );
 

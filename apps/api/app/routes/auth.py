@@ -9,7 +9,13 @@ from app.db import get_session
 from app.deps import UnauthorizedError, get_current_user
 from app.errors import PuppycatError
 from app.models import User
-from app.schemas import LoginRequest, RegisterRequest, TokenResponse, UserOut
+from app.schemas import (
+    LoginRequest,
+    ProfileUpdate,
+    RegisterRequest,
+    TokenResponse,
+    UserOut,
+)
 from app.security import create_access_token, hash_password, verify_password
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -23,13 +29,20 @@ def _normalize_email(email: str) -> str:
     return email.strip().lower()
 
 
+def _user_out(user: User) -> UserOut:
+    return UserOut(
+        id=user.id,
+        email=user.email or "",
+        display_name=user.display_name,
+        passport_countries=list(user.passport_countries or []),
+        home_country=user.home_country,
+    )
+
+
 def _token_response(user: User) -> TokenResponse:
     settings = get_settings()
     token = create_access_token(user.id, settings)
-    return TokenResponse(
-        access_token=token,
-        user=UserOut(id=user.id, email=user.email or "", display_name=user.display_name),
-    )
+    return TokenResponse(access_token=token, user=_user_out(user))
 
 
 @router.post("/register", response_model=TokenResponse)
@@ -72,4 +85,27 @@ async def login(
 
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)) -> UserOut:
-    return UserOut(id=user.id, email=user.email or "", display_name=user.display_name)
+    return _user_out(user)
+
+
+@router.patch("/profile", response_model=UserOut)
+async def update_profile(
+    req: ProfileUpdate,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> UserOut:
+    if req.display_name is not None:
+        user.display_name = req.display_name.strip() or None
+    if req.passport_countries is not None:
+        # Normalise to upper-case ISO-ish codes, de-duplicated, order preserved.
+        seen: list[str] = []
+        for code in req.passport_countries:
+            c = code.strip().upper()
+            if c and c not in seen:
+                seen.append(c)
+        user.passport_countries = seen
+    if req.home_country is not None:
+        user.home_country = req.home_country.strip().upper() or None
+    await session.commit()
+    await session.refresh(user)
+    return _user_out(user)

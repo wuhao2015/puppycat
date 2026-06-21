@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from app.config import get_settings
 from app.errors import PuppycatError
-from app.routes import auth, chat, documents, itinerary, visa
+from app.routes import auth, documents, trips
 
 settings = get_settings()
 
@@ -39,7 +39,5 @@ async def health() -> dict[str, str]:
 
 
 app.include_router(auth.router)
-app.include_router(itinerary.router)
-app.include_router(visa.router)
-app.include_router(chat.router)
+app.include_router(trips.router)
 app.include_router(documents.router)

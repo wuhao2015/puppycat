@@ -1,11 +1,18 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Clock, Download, ExternalLink, MapPin, CloudRain } from "lucide-react";
 import dynamic from "next/dynamic";
-import { downloadPdf } from "@/lib/api";
-import type { Itinerary, ItineraryItem } from "@/lib/types";
+import { downloadPdf, getTripSummary } from "@/lib/api";
+import type {
+  Itinerary,
+  ItineraryItem,
+  SummaryItinerary,
+  VisaNotice,
+} from "@/lib/types";
 import WarningBadge from "./WarningBadge";
+import SummaryView from "./SummaryView";
+import VisaNoticePanel from "./VisaNoticePanel";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
 
@@ -62,8 +69,42 @@ function ItemRow({ item }: { item: ItineraryItem }) {
   );
 }
 
-export default function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
+interface ItineraryViewProps {
+  itinerary: Itinerary;
+  tripId: string;
+  visaNotices?: VisaNotice[];
+}
+
+export default function ItineraryView({
+  itinerary,
+  tripId,
+  visaNotices = [],
+}: ItineraryViewProps) {
   const [downloading, setDownloading] = useState(false);
+  const [view, setView] = useState<"enriched" | "summary">("enriched");
+  const [summary, setSummary] = useState<SummaryItinerary | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+
+  // A freshly generated itinerary invalidates any cached summary.
+  useEffect(() => {
+    setSummary(null);
+    setView("enriched");
+  }, [itinerary]);
+
+  async function showSummary() {
+    setView("summary");
+    if (!summary) {
+      setSummaryLoading(true);
+      try {
+        setSummary(await getTripSummary(tripId));
+      } catch (err) {
+        alert((err as Error).message);
+        setView("enriched");
+      } finally {
+        setSummaryLoading(false);
+      }
+    }
+  }
 
   async function handleDownload() {
     setDownloading(true);
@@ -80,6 +121,18 @@ export default function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
     }
   }
 
+  const toggleBtn = (label: string, value: "enriched" | "summary") => (
+    <button
+      type="button"
+      onClick={() => (value === "summary" ? showSummary() : setView("enriched"))}
+      className={`rounded-md px-3 py-1.5 text-sm font-medium ${
+        view === value ? "bg-white text-brand shadow-sm" : "text-gray-600"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -89,15 +142,41 @@ export default function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
             {itinerary.start_date} – {itinerary.end_date}
           </p>
         </div>
-        <button
-          onClick={handleDownload}
-          disabled={downloading}
-          className="flex items-center gap-1 rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg disabled:opacity-50"
-        >
-          <Download size={15} /> {downloading ? "Preparing…" : "Download PDF"}
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-lg bg-gray-100 p-0.5">
+            {toggleBtn("Guide", "enriched")}
+            {toggleBtn("Summary", "summary")}
+          </div>
+          <button
+            onClick={handleDownload}
+            disabled={downloading}
+            className="flex items-center gap-1 rounded-lg bg-brand px-3 py-2 text-sm font-medium text-brand-fg disabled:opacity-50"
+          >
+            <Download size={15} /> {downloading ? "Preparing…" : "Download PDF"}
+          </button>
+        </div>
       </div>
 
+      <VisaNoticePanel notices={visaNotices} />
+
+      {view === "summary" ? (
+        summaryLoading || !summary ? (
+          <div className="rounded-xl border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+            Building summary…
+          </div>
+        ) : (
+          <SummaryView summary={summary} />
+        )
+      ) : (
+        <EnrichedBody itinerary={itinerary} />
+      )}
+    </div>
+  );
+}
+
+function EnrichedBody({ itinerary }: { itinerary: Itinerary }) {
+  return (
+    <div className="space-y-5">
       {itinerary.warnings.length > 0 && (
         <div className="space-y-1.5 rounded-xl border border-amber-200 bg-amber-50/50 p-3">
           <p className="text-sm font-medium text-amber-800">Trip notices</p>
@@ -133,6 +212,9 @@ export default function ItineraryView({ itinerary }: { itinerary: Itinerary }) {
                 <ItemRow key={i} item={item} />
               ))}
             </div>
+            {day.accommodation && (
+              <p className="mt-3 text-xs text-gray-500">Stay: {day.accommodation}</p>
+            )}
           </div>
         ))}
       </div>

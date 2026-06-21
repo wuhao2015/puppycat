@@ -2,11 +2,12 @@ import type {
   AuthUser,
   Itinerary,
   ItineraryResponse,
+  ProfileUpdate,
+  SummaryItinerary,
   TokenResponse,
-  TripRequest,
+  TripDetail,
   TripSummary,
-  VisaChecklist,
-  VisaRequest,
+  TripVisaNotices,
 } from "./types";
 
 const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
@@ -78,45 +79,84 @@ export async function getMe(): Promise<AuthUser> {
   return handle<AuthUser>(resp);
 }
 
+export async function updateProfile(payload: ProfileUpdate): Promise<AuthUser> {
+  const resp = await fetch(`${BASE_URL}/api/auth/profile`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify(payload),
+  });
+  return handle<AuthUser>(resp);
+}
+
+// --- Trip sessions ----------------------------------------------------------
+
+export async function createTrip(): Promise<TripDetail> {
+  const resp = await fetch(`${BASE_URL}/api/trips`, {
+    method: "POST",
+    headers: headers(),
+  });
+  return handle<TripDetail>(resp);
+}
+
 export async function listTrips(): Promise<TripSummary[]> {
   const resp = await fetch(`${BASE_URL}/api/trips`, { headers: headers() });
   return handle<TripSummary[]>(resp);
 }
 
-export async function getItinerary(itineraryId: string): Promise<ItineraryResponse> {
-  const resp = await fetch(`${BASE_URL}/api/itineraries/${itineraryId}`, {
+export async function getTrip(tripId: string): Promise<TripDetail> {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}`, { headers: headers() });
+  return handle<TripDetail>(resp);
+}
+
+export async function renameTrip(tripId: string, title: string): Promise<TripSummary> {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}`, {
+    method: "PATCH",
+    headers: headers(),
+    body: JSON.stringify({ title }),
+  });
+  return handle<TripSummary>(resp);
+}
+
+export async function deleteTrip(tripId: string): Promise<void> {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+  await handle<{ status: string }>(resp);
+}
+
+export async function updateTripPlan(tripId: string): Promise<ItineraryResponse> {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}/plan`, {
+    method: "POST",
     headers: headers(),
   });
   return handle<ItineraryResponse>(resp);
 }
 
-export async function createItinerary(req: TripRequest): Promise<ItineraryResponse> {
-  const resp = await fetch(`${BASE_URL}/api/itinerary`, {
-    method: "POST",
+export async function getTripSummary(tripId: string): Promise<SummaryItinerary> {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}/summary`, {
     headers: headers(),
-    body: JSON.stringify(req),
   });
-  return handle<ItineraryResponse>(resp);
+  return handle<SummaryItinerary>(resp);
 }
 
-export async function getVisaChecklist(req: VisaRequest): Promise<VisaChecklist> {
-  const resp = await fetch(`${BASE_URL}/api/visa-checklist`, {
-    method: "POST",
+export async function getTripVisaNotice(tripId: string): Promise<TripVisaNotices> {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}/visa-notice`, {
     headers: headers(),
-    body: JSON.stringify(req),
   });
-  return handle<VisaChecklist>(resp);
+  return handle<TripVisaNotices>(resp);
 }
 
-/** Stream chat tokens as plain text chunks. Calls `onChunk` for each delta. */
-export async function streamChat(
-  messages: { role: string; content: string }[],
+/** Stream a chat turn for a trip. Persists both messages server-side. */
+export async function sendTripMessage(
+  tripId: string,
+  content: string,
   onChunk: (text: string) => void,
 ): Promise<void> {
-  const resp = await fetch(`${BASE_URL}/api/chat`, {
+  const resp = await fetch(`${BASE_URL}/api/trips/${tripId}/chat`, {
     method: "POST",
     headers: headers(),
-    body: JSON.stringify({ messages }),
+    body: JSON.stringify({ content }),
   });
   if (resp.status === 401) throw new UnauthorizedError("Please sign in to chat.");
   if (!resp.ok || !resp.body) {
@@ -131,10 +171,10 @@ export async function streamChat(
   }
 }
 
-/** POST a payload to a document endpoint and trigger a PDF download. */
+/** POST an itinerary to the PDF endpoint and trigger a download. */
 export async function downloadPdf(
   path: "itinerary" | "visa" | "cover-letter",
-  payload: Itinerary | VisaChecklist | Record<string, unknown>,
+  payload: Itinerary | Record<string, unknown>,
   filename: string,
 ): Promise<void> {
   const resp = await fetch(`${BASE_URL}/api/documents/${path}`, {

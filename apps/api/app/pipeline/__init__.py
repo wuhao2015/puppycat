@@ -1,4 +1,13 @@
-from app.pipeline.itinerary import generate_itinerary
+from app.pipeline.itinerary import (
+    extract_trip_request,
+    generate_itinerary,
+    revise_itinerary,
+)
 from app.pipeline.verify import verify_itinerary
 
-__all__ = ["generate_itinerary", "verify_itinerary"]
+__all__ = [
+    "extract_trip_request",
+    "generate_itinerary",
+    "revise_itinerary",
+    "verify_itinerary",
+]

@@ -51,6 +51,7 @@ export interface ItineraryDay {
   summary?: string | null;
   items: ItineraryItem[];
   weather?: DayWeather | null;
+  accommodation?: string | null;
 }
 
 export interface Itinerary {
@@ -112,12 +113,15 @@ export interface VisaRequest {
 export interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
+  ts?: string | null;
 }
 
 export interface AuthUser {
   id: string;
   email: string;
   display_name?: string | null;
+  passport_countries: string[];
+  home_country?: string | null;
 }
 
 export interface TokenResponse {
@@ -126,11 +130,64 @@ export interface TokenResponse {
   user: AuthUser;
 }
 
+export interface ProfileUpdate {
+  display_name?: string | null;
+  passport_countries?: string[] | null;
+  home_country?: string | null;
+}
+
 export interface TripSummary {
   trip_id: string;
+  title?: string | null;
+  destination?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  itinerary_id?: string | null;
+}
+
+export interface TripDetail {
+  trip_id: string;
+  title?: string | null;
+  destination?: string | null;
+  start_date?: string | null;
+  end_date?: string | null;
+  created_at: string;
+  updated_at?: string | null;
+  messages: ChatMessage[];
+  itinerary_id?: string | null;
+  itinerary?: Itinerary | null;
+}
+
+export interface SummaryDay {
+  date: string;
+  destination?: string | null;
+  transport: string[];
+  activities: string[];
+  accommodation?: string | null;
+}
+
+export interface SummaryItinerary {
   destination: string;
   start_date: string;
   end_date: string;
-  created_at: string;
-  itinerary_id?: string | null;
+  days: SummaryDay[];
+  disclaimer: string;
+}
+
+export interface VisaNotice {
+  passport_country: string;
+  destination_country: string;
+  visa_required?: boolean | null;
+  allowed_stay?: string | null;
+  summary?: string | null;
+  key_documents: string[];
+  official_link?: string | null;
+  disclaimer: string;
+}
+
+export interface TripVisaNotices {
+  destination?: string | null;
+  notices: VisaNotice[];
 }

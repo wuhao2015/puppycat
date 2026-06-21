@@ -18,6 +18,14 @@ class UserOut(BaseModel):
     id: str
     email: str
     display_name: str | None = None
+    passport_countries: list[str] = Field(default_factory=list)
+    home_country: str | None = None
+
+
+class ProfileUpdate(BaseModel):
+    display_name: str | None = None
+    passport_countries: list[str] | None = None
+    home_country: str | None = None
 
 
 class RegisterRequest(BaseModel):
@@ -116,6 +124,8 @@ class ItineraryDay(BaseModel):
     summary: str | None = None
     items: list[ItineraryItem] = Field(default_factory=list)
     weather: DayWeather | None = None
+    # Where the traveller stays that night, surfaced in the concise summary.
+    accommodation: str | None = None
 
 
 class Itinerary(BaseModel):
@@ -155,11 +165,62 @@ class ItineraryResponse(BaseModel):
 
 class TripSummary(BaseModel):
     trip_id: str
+    title: str | None = None
+    destination: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
+    created_at: str
+    updated_at: str | None = None
+    itinerary_id: str | None = None
+
+
+# --- Concise summary itinerary ---------------------------------------------
+
+
+class SummaryDay(BaseModel):
+    date: str
+    destination: str | None = None
+    transport: list[str] = Field(default_factory=list)
+    activities: list[str] = Field(default_factory=list)
+    accommodation: str | None = None
+
+
+class SummaryItinerary(BaseModel):
     destination: str
     start_date: str
     end_date: str
+    days: list[SummaryDay] = Field(default_factory=list)
+    disclaimer: str = DISCLAIMER
+
+
+# --- Trip sessions (chat-first) --------------------------------------------
+
+
+class ChatMessageOut(BaseModel):
+    role: str
+    content: str
+    ts: str | None = None
+
+
+class ChatTurnRequest(BaseModel):
+    content: str
+
+
+class TripDetail(BaseModel):
+    trip_id: str
+    title: str | None = None
+    destination: str | None = None
+    start_date: str | None = None
+    end_date: str | None = None
     created_at: str
+    updated_at: str | None = None
+    messages: list[ChatMessageOut] = Field(default_factory=list)
     itinerary_id: str | None = None
+    itinerary: Itinerary | None = None
+
+
+class TripRenameRequest(BaseModel):
+    title: str
 
 
 # --- Visa -------------------------------------------------------------------
@@ -191,6 +252,26 @@ class VisaChecklist(BaseModel):
     official_links: list[str] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
     disclaimer: str = DISCLAIMER
+
+
+class VisaNotice(BaseModel):
+    """Lightweight, per-trip visa reminder grounded in the user's passports.
+
+    Deliberately concise: a heads-up, not a full application package."""
+
+    passport_country: str
+    destination_country: str
+    visa_required: bool | None = None
+    allowed_stay: str | None = None
+    summary: str | None = None
+    key_documents: list[str] = Field(default_factory=list)
+    official_link: str | None = None
+    disclaimer: str = DISCLAIMER
+
+
+class TripVisaNotices(BaseModel):
+    destination: str | None = None
+    notices: list[VisaNotice] = Field(default_factory=list)
 
 
 # --- Chat -------------------------------------------------------------------

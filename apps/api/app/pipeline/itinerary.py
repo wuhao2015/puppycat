@@ -29,11 +29,12 @@ Return a JSON object with this exact shape:
       "date": "YYYY-MM-DD",
       "title": str,
       "summary": str,
+      "accommodation": str | null,   // where the traveller stays that night, e.g. "Hotel Granvia Kyoto"
       "items": [
         {
           "name": str,
           "place_id": str | null,   // MUST be a place_id from the candidate list when the item is one of those venues
-          "category": str,          // e.g. "museum", "restaurant", "walk"
+          "category": str,          // e.g. "museum", "restaurant", "walk", "transport"
           "description": str,
           "start_time": "HH:MM",
           "end_time": "HH:MM"
@@ -45,6 +46,8 @@ Return a JSON object with this exact shape:
 }
 Only reference real venues from the candidate list (use their exact place_id). You may add
 generic activities (e.g. "lunch near the harbour") without a place_id. Do not invent place_ids.
+Use category "transport" for any travel legs (flights, trains, transfers) so they can be
+summarised separately, and set each day's "accommodation" when it is known.
 """
 
 
@@ -211,3 +214,98 @@ async def _validate_or_repair(raw: dict, req: TripRequest, deps: Deps) -> Itiner
         fixed.setdefault("start_date", req.start_date)
         fixed.setdefault("end_date", req.end_date)
         return Itinerary.model_validate(fixed)
+
+
+_TRIP_REQUEST_SHAPE = """
+Return a JSON object with this exact shape:
+{
+  "destination": str | null,       // primary destination, e.g. "Kyoto, Japan"
+  "start_date": "YYYY-MM-DD" | null,
+  "end_date": "YYYY-MM-DD" | null,
+  "interests": [str],              // themes the traveller mentioned
+  "budget": str | null,            // e.g. "mid-range"
+  "pace": "relaxed" | "balanced" | "packed",
+  "travelers": int,
+  "notes": str | null              // anything else relevant to planning
+}
+Infer values only from the conversation. Use null/empty when the traveller has not said.
+"""
+
+
+def _format_conversation(messages: list[dict]) -> str:
+    lines = []
+    for m in messages:
+        role = m.get("role", "user")
+        content = (m.get("content") or "").strip()
+        if content:
+            lines.append(f"{role.upper()}: {content}")
+    return "\n".join(lines) if lines else "(no conversation yet)"
+
+
+async def extract_trip_request(
+    messages: list[dict], deps: Deps, *, existing: dict | None = None
+) -> TripRequest:
+    """Distill a structured TripRequest from a free-form chat conversation.
+
+    `existing` carries forward previously-resolved params so later turns refine
+    rather than reset the plan.
+    """
+    system = (
+        "You extract structured trip-planning parameters from a conversation between a "
+        "traveller and a planning assistant. Be faithful to what was actually said."
+    )
+    user = (
+        f"Previously resolved parameters (may be empty):\n"
+        f"{json.dumps(existing or {}, indent=2)}\n\n"
+        f"Conversation so far:\n{_format_conversation(messages)}\n\n"
+        f"{_TRIP_REQUEST_SHAPE}"
+    )
+    raw = await deps.llm.complete_json(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        tier=ModelTier.CHEAP,
+    )
+    if existing:
+        # Keep prior values when the new extraction leaves a field blank.
+        for key, value in existing.items():
+            if raw.get(key) in (None, "", []) and value not in (None, "", []):
+                raw[key] = value
+    try:
+        return TripRequest.model_validate(raw)
+    except ValidationError:
+        # Minimal coercion: ensure required string fields are present.
+        return TripRequest(
+            destination=raw.get("destination") or (existing or {}).get("destination") or "",
+            start_date=raw.get("start_date") or (existing or {}).get("start_date") or "",
+            end_date=raw.get("end_date") or (existing or {}).get("end_date") or "",
+            interests=raw.get("interests") or [],
+            budget=raw.get("budget"),
+            notes=raw.get("notes"),
+        )
+
+
+async def revise_itinerary(
+    existing: Itinerary, messages: list[dict], req: TripRequest, deps: Deps
+) -> Itinerary:
+    """Edit an existing itinerary in response to the latest conversation.
+
+    Lighter than a full rebuild: keep what works, apply the requested changes,
+    then run one verification pass so any new picks are still grounded.
+    """
+    system = (
+        "You are revising an existing travel itinerary based on the traveller's latest "
+        "requests. Apply the requested changes, keep everything else intact, preserve timing "
+        "and flow, and keep each item's place_id accurate. Do not invent place_ids."
+    )
+    user = (
+        f"Current itinerary JSON:\n{existing.model_dump_json()}\n\n"
+        f"Conversation (most recent requests last):\n{_format_conversation(messages)}\n\n"
+        f"{_ITINERARY_SHAPE}"
+    )
+    raw = await deps.llm.complete_json(
+        [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        tier=ModelTier.SYNTHESIS,
+    )
+    revised = await _validate_or_repair(raw, req, deps)
+    revised = await verify_itinerary(revised, deps)
+    revised.warnings = _dedupe_warnings(revised.warnings)
+    return revised
