@@ -60,7 +60,7 @@ cp .env.example .env
 docker compose up --build
 ```
 
-This starts Postgres, the FastAPI backend (http://localhost:8000), and the Next.js
+This starts Postgres, the FastAPI backend (http://localhost:8001), and the Next.js
 frontend (http://localhost:3000).
 
 ### 3. Run locally without Docker
@@ -72,7 +72,7 @@ cd apps/api
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 alembic upgrade head
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8001
 ```
 
 Frontend:
@@ -105,7 +105,7 @@ All app endpoints require an `Authorization: Bearer <jwt>` header. Obtain a toke
 `/api/auth/register` (requires the shared `SIGNUP_CODE`) or `/api/auth/login`. Each user
 only sees their own trips and itineraries.
 
-Interactive docs are available at http://localhost:8000/docs once the backend is running.
+Interactive docs are available at http://localhost:8001/docs once the backend is running.
 
 ## Disclaimer
 

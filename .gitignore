@@ -29,6 +29,7 @@ apps/web/lib/api-types.ts
 .idea/
 .vscode/
 .cursor/
+.claude/
 
 # Misc
 plans.md

@@ -10,7 +10,7 @@ import type {
   TripVisaNotices,
 } from "./types";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8001";
+const BASE_URL = "";
 const TOKEN_KEY = "puppycat_token";
 
 /** Raised when the API returns 401; the UI uses this to redirect to /login. */

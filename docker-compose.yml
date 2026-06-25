@@ -34,13 +34,15 @@ services:
     build:
       context: ./apps/web
       args:
-        # The browser reaches the API via the host-published port (8001), since
-        # the API container's host mapping is 8001->8000. Hardcoded (not ${...})
-        # so a stale NEXT_PUBLIC_API_BASE_URL in .env cannot point it back at 8000.
-        # These are baked into the client bundle at build time.
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8001
+        API_INTERNAL_BASE_URL: http://api:8000
+        # Browser requests stay same-origin through Next. The rewrite target is
+        # baked into the server build, so point it at the Docker service name.
         NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
     env_file: .env
+    environment:
+      # Browser requests stay same-origin through Next; the Next server proxies
+      # them to the API over the Docker network.
+      API_INTERNAL_BASE_URL: http://api:8000
     ports:
       - "3000:3000"
     depends_on:
