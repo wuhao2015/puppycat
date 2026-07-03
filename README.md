@@ -84,6 +84,18 @@ npm run gen:types   # generate TS types from the backend OpenAPI schema
 npm run dev
 ```
 
+### Ports
+
+| Port | Service | Where it is used |
+|---|---|---|
+| `3000` | Next.js frontend | Host and container port for the web app (`http://localhost:3000`) |
+| `8001` | FastAPI backend | Host port for the API in Docker and local runs (`http://localhost:8001`) |
+| `8000` | FastAPI backend | Container/internal Docker port; the host maps `8001 -> 8000` |
+| `5432` | Postgres | Host and container port for the database |
+
+Inside Docker, the web service reaches the API at `http://api:8000`. Browser requests use the
+same-origin Next.js rewrite and do not need to call the API container directly.
+
 ## API surface
 
 | Method | Path | Auth | Description |
