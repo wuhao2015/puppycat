@@ -38,7 +38,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <TripsProvider>
       <div className="flex h-screen overflow-hidden bg-gray-50">
         <Sidebar />
-        <main className="flex-1 overflow-hidden">{children}</main>
+        <main className="min-h-0 min-w-0 flex-1 overflow-hidden">{children}</main>
       </div>
     </TripsProvider>
   );

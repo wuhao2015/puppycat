@@ -50,6 +50,10 @@ export default function TripWorkspace({ initialTripId }: { initialTripId?: strin
   }, []);
 
   useEffect(() => {
+    scrollToBottom();
+  }, [messages.length, scrollToBottom]);
+
+  useEffect(() => {
     let active = true;
     setTripId(initialTripId);
     if (!initialTripId) {
@@ -63,6 +67,7 @@ export default function TripWorkspace({ initialTripId }: { initialTripId?: strin
         const trip = await getTrip(initialTripId);
         if (!active) return;
         setMessages(trip.messages.length ? trip.messages : [GREETING]);
+        scrollToBottom();
         setItinerary(trip.itinerary ?? null);
         if (trip.itinerary) loadVisa(initialTripId);
       } catch {
@@ -72,7 +77,7 @@ export default function TripWorkspace({ initialTripId }: { initialTripId?: strin
     return () => {
       active = false;
     };
-  }, [initialTripId, loadVisa]);
+  }, [initialTripId, loadVisa, scrollToBottom]);
 
   async function send() {
     const text = input.trim();
@@ -140,10 +145,10 @@ export default function TripWorkspace({ initialTripId }: { initialTripId?: strin
   }
 
   return (
-    <div className="grid h-full grid-cols-1 lg:grid-cols-2">
+    <div className="grid h-full min-h-0 min-w-0 grid-cols-1 lg:grid-cols-2">
       {/* Chat column */}
-      <div className="flex h-full flex-col border-r border-gray-200 bg-white">
-        <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto p-4">
+      <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-gray-200 bg-white">
+        <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
           {messages.map((m, i) => (
             <div
               key={i}
@@ -210,7 +215,7 @@ export default function TripWorkspace({ initialTripId }: { initialTripId?: strin
       </div>
 
       {/* Itinerary column */}
-      <div className="h-full overflow-y-auto p-5">
+      <div className="h-full min-h-0 min-w-0 overflow-y-auto p-5">
         {itinerary && tripId ? (
           <ItineraryView itinerary={itinerary} tripId={tripId} visaNotices={visaNotices} />
         ) : (
