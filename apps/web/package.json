@@ -20,6 +20,7 @@
     "tailwind-merge": "^2.5.2"
   },
   "devDependencies": {
+    "@types/geojson-vt": "^3.2.5",
     "@types/mapbox-gl": "^3.4.0",
     "@types/node": "^20",
     "@types/react": "^18",

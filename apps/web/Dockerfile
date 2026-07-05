@@ -2,8 +2,14 @@ FROM node:20-slim
 
 WORKDIR /app
 
-COPY package.json ./
-RUN npm install
+COPY package.json package-lock.json ./
+RUN for i in 1 2 3; do \
+      rm -rf node_modules && \
+      npm install --no-audit --no-fund && \
+      test -x node_modules/.bin/next && break; \
+      test "$i" = "3" && exit 1; \
+      sleep 2; \
+    done
 
 COPY . .
 

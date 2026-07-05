@@ -21,26 +21,24 @@ class ModelTier(str, enum.Enum):
 
 
 # Rough per-1M-token USD prices used only for budget estimation, not billing.
-# Models marked $0 are free on AI Studio up to their daily quota (typically
-# 1,500 RPD for Flash models). Pro models became paid-only in April 2026.
+# Models marked $0 have free-tier standard pricing in the Gemini Developer API.
 _PRICE_PER_1M: dict[str, tuple[float, float]] = {
     # OpenAI
     "gpt-4o-mini": (0.15, 0.60),
     "gpt-4o": (2.50, 10.00),
-    # Gemini 2.0 — free
+    # Gemini 2.0 — shut down, kept for historical spend records.
     "gemini-2.0-flash": (0.0, 0.0),
     "gemini-2.0-flash-lite": (0.0, 0.0),
-    # Gemini 2.5 — Flash free (1,500 RPD), Pro paid-only / 50 RPD
+    # Gemini 2.5
     "gemini-2.5-flash": (0.0, 0.0),
     "gemini-2.5-flash-lite": (0.0, 0.0),
     "gemini-2.5-flash-preview": (0.0, 0.0),
-    "gemini-2.5-pro": (1.25, 10.00),        # effectively paid (50 RPD free)
-    # Gemini 3 — Flash free, Pro paid
-    "gemini-3-flash": (0.0, 0.0),
+    "gemini-2.5-pro": (0.0, 0.0),
+    # Gemini 3 — free Flash-family text models
+    "gemini-3-flash-preview": (0.0, 0.0),
+    "gemini-3.5-flash": (0.0, 0.0),
     "gemini-3.1-flash-lite": (0.0, 0.0),
     "gemini-3.1-pro-preview": (2.00, 12.00),
-    # Gemini 3.5 — Flash free
-    "gemini-3.5-flash": (0.0, 0.0),
 }
 _DEFAULT_PRICE = (2.50, 10.00)
 
@@ -99,6 +97,10 @@ class LLMProvider(ABC):
             if tier is ModelTier.CHEAP
             else self.settings.llm_synthesis_model
         )
+
+    def models_for(self, tier: ModelTier) -> list[str]:
+        models = [self.model_for(tier), *self.settings.llm_fallback_model_list]
+        return list(dict.fromkeys(models))
 
     @abstractmethod
     async def complete(
@@ -257,6 +259,43 @@ class GeminiProvider(LLMProvider):
                 getattr(usage, "candidates_token_count", 0) or 0,
             )
 
+    async def _generate_content_with_fallback(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tier: ModelTier,
+        temperature: float,
+        json_mode: bool = False,
+    ) -> tuple[str, Any]:
+        system, contents = self._convert_messages(messages)
+        from google.genai import types
+
+        config_kwargs: dict[str, Any] = {
+            "system_instruction": system or None,
+            "temperature": temperature,
+        }
+        if json_mode:
+            config_kwargs["response_mime_type"] = "application/json"
+        cfg = types.GenerateContentConfig(**config_kwargs)
+
+        last_exc: Exception | None = None
+        models = self.models_for(tier)
+        for model in models:
+            try:
+                resp = await self._client.aio.models.generate_content(
+                    model=model, contents=contents, config=cfg
+                )
+            except Exception as exc:  # noqa: BLE001 - try next configured free model
+                last_exc = exc
+                continue
+            self._record_usage(model, resp)
+            return model, resp
+
+        raise UpstreamUnavailableError(
+            "Gemini request failed for every configured model "
+            f"({', '.join(models)}): {last_exc}"
+        ) from last_exc
+
     # ------------------------------------------------------------------
     # LLMProvider interface
     # ------------------------------------------------------------------
@@ -265,43 +304,18 @@ class GeminiProvider(LLMProvider):
         self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.4
     ) -> str:
         self.budget.check()
-        model = self.model_for(tier)
-        system, contents = self._convert_messages(messages)
-        from google.genai import types
-
-        cfg = types.GenerateContentConfig(
-            system_instruction=system or None,
-            temperature=temperature,
+        _model, resp = await self._generate_content_with_fallback(
+            messages, tier=tier, temperature=temperature
         )
-        try:
-            resp = await self._client.aio.models.generate_content(
-                model=model, contents=contents, config=cfg
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamUnavailableError(f"Gemini request failed: {exc}") from exc
-        self._record_usage(model, resp)
         return resp.text or ""
 
     async def complete_json(
         self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.2
     ) -> dict[str, Any]:
         self.budget.check()
-        model = self.model_for(tier)
-        system, contents = self._convert_messages(messages)
-        from google.genai import types
-
-        cfg = types.GenerateContentConfig(
-            system_instruction=system or None,
-            temperature=temperature,
-            response_mime_type="application/json",
+        _model, resp = await self._generate_content_with_fallback(
+            messages, tier=tier, temperature=temperature, json_mode=True
         )
-        try:
-            resp = await self._client.aio.models.generate_content(
-                model=model, contents=contents, config=cfg
-            )
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamUnavailableError(f"Gemini request failed: {exc}") from exc
-        self._record_usage(model, resp)
         return json.loads(resp.text or "{}")
 
     async def stream(
@@ -312,19 +326,33 @@ class GeminiProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[str]:
         self.budget.check()
-        model = self.model_for(tier)
         system, contents = self._convert_messages(messages)
         from google.genai import types
 
         cfg = types.GenerateContentConfig(system_instruction=system or None)
-        try:
-            async for chunk in await self._client.aio.models.generate_content_stream(
-                model=model, contents=contents, config=cfg
-            ):
-                if chunk.text:
-                    yield chunk.text
-        except Exception as exc:  # noqa: BLE001
-            raise UpstreamUnavailableError(f"Gemini stream failed: {exc}") from exc
+        last_exc: Exception | None = None
+        models = self.models_for(tier)
+        for model in models:
+            yielded = False
+            try:
+                async for chunk in await self._client.aio.models.generate_content_stream(
+                    model=model, contents=contents, config=cfg
+                ):
+                    if chunk.text:
+                        yielded = True
+                        yield chunk.text
+                return
+            except Exception as exc:  # noqa: BLE001 - fall back if nothing was sent yet
+                if yielded:
+                    raise UpstreamUnavailableError(
+                        f"Gemini stream failed after output started on {model}: {exc}"
+                    ) from exc
+                last_exc = exc
+
+        raise UpstreamUnavailableError(
+            "Gemini stream failed for every configured model "
+            f"({', '.join(models)}): {last_exc}"
+        ) from last_exc
 
 
 def build_llm_provider(settings: Settings | None = None) -> LLMProvider:
