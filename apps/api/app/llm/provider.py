@@ -266,7 +266,7 @@ class GeminiProvider(LLMProvider):
         tier: ModelTier,
         temperature: float,
         json_mode: bool = False,
-    ) -> tuple[str, Any]:
+    ) -> tuple[str, str]:
         system, contents = self._convert_messages(messages)
         from google.genai import types
 
@@ -285,11 +285,18 @@ class GeminiProvider(LLMProvider):
                 resp = await self._client.aio.models.generate_content(
                     model=model, contents=contents, config=cfg
                 )
+                text = resp.text or ""
+                if not text.strip():
+                    raise ValueError("model returned an empty response")
+                if json_mode:
+                    parsed = json.loads(text)
+                    if not isinstance(parsed, dict):
+                        raise ValueError("model returned JSON that is not an object")
             except Exception as exc:  # noqa: BLE001 - try next configured free model
                 last_exc = exc
                 continue
             self._record_usage(model, resp)
-            return model, resp
+            return model, text
 
         raise UpstreamUnavailableError(
             "Gemini request failed for every configured model "
@@ -304,19 +311,19 @@ class GeminiProvider(LLMProvider):
         self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.4
     ) -> str:
         self.budget.check()
-        _model, resp = await self._generate_content_with_fallback(
+        _model, text = await self._generate_content_with_fallback(
             messages, tier=tier, temperature=temperature
         )
-        return resp.text or ""
+        return text
 
     async def complete_json(
         self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.2
     ) -> dict[str, Any]:
         self.budget.check()
-        _model, resp = await self._generate_content_with_fallback(
+        _model, text = await self._generate_content_with_fallback(
             messages, tier=tier, temperature=temperature, json_mode=True
         )
-        return json.loads(resp.text or "{}")
+        return json.loads(text)
 
     async def stream(
         self,
