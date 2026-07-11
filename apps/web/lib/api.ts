@@ -160,7 +160,14 @@ export async function sendTripMessage(
   });
   if (resp.status === 401) throw new UnauthorizedError("Please sign in to chat.");
   if (!resp.ok || !resp.body) {
-    throw new Error(`Chat failed (${resp.status})`);
+    let detail = `Chat failed (${resp.status})`;
+    try {
+      const body = await resp.json();
+      if (body?.detail) detail = body.detail;
+    } catch {
+      /* non-JSON error body */
+    }
+    throw new Error(detail);
   }
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();

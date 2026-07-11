@@ -60,9 +60,16 @@ async def chat(req: ChatRequest, deps: Deps = Depends(get_deps)) -> StreamingRes
         {"role": "system", "content": f"Context retrieved for this turn:\n{context}"},
     ]
     messages += [{"role": m.role, "content": m.content} for m in req.messages]
+    llm_stream = deps.llm.stream(messages, tier=ModelTier.CHEAP)
+    try:
+        first_chunk = await anext(llm_stream)
+    except StopAsyncIteration:
+        first_chunk = None
 
     async def token_stream() -> AsyncIterator[str]:
-        async for chunk in deps.llm.stream(messages, tier=ModelTier.CHEAP):
+        if first_chunk is not None:
+            yield first_chunk
+        async for chunk in llm_stream:
             yield chunk
 
     return StreamingResponse(token_stream(), media_type="text/plain; charset=utf-8")

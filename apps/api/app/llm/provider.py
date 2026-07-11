@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from datetime import date
 from typing import Any
+from urllib.parse import urlparse
 
 from app.config import Settings, get_settings
 from app.errors import BudgetExceededError, ConfigurationError, UpstreamUnavailableError
@@ -41,6 +42,7 @@ _PRICE_PER_1M: dict[str, tuple[float, float]] = {
     "gemini-3.1-pro-preview": (2.00, 12.00),
 }
 _DEFAULT_PRICE = (2.50, 10.00)
+_OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
 
 
 class _DailyBudget:
@@ -125,14 +127,26 @@ class LLMProvider(ABC):
 class OpenAIProvider(LLMProvider):
     def __init__(self, settings: Settings) -> None:
         super().__init__(settings)
-        if not settings.openai_api_key:
+        api_key = settings.openai_api_key.strip()
+        if not api_key:
             raise ConfigurationError("OPENAI_API_KEY is not set.")
+        base_url = self._openai_base_url()
         from openai import AsyncOpenAI
 
-        kwargs: dict[str, Any] = {"api_key": settings.openai_api_key}
-        if settings.openai_base_url:
-            kwargs["base_url"] = settings.openai_base_url
+        kwargs: dict[str, Any] = {"api_key": api_key, "base_url": base_url}
         self._client = AsyncOpenAI(**kwargs)
+
+    def _openai_base_url(self) -> str:
+        base_url = self.settings.openai_base_url.strip()
+        if not base_url:
+            return _OPENAI_DEFAULT_BASE_URL
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ConfigurationError(
+                "OPENAI_BASE_URL must start with http:// or https://, "
+                "or be left empty for OpenAI's default API endpoint."
+            )
+        return base_url
 
     async def complete(
         self, messages: list[dict[str, Any]], *, tier: ModelTier, temperature: float = 0.4

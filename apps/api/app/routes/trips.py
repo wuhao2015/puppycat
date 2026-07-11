@@ -236,10 +236,18 @@ async def chat_turn(
         {"role": "system", "content": f"Context retrieved for this turn:\n{context}"},
     ]
     llm_messages += [{"role": m["role"], "content": m["content"]} for m in history]
+    llm_stream = deps.llm.stream(llm_messages, tier=ModelTier.CHEAP)
+    try:
+        first_chunk = await anext(llm_stream)
+    except StopAsyncIteration:
+        first_chunk = None
 
     async def token_stream() -> AsyncIterator[str]:
         parts: list[str] = []
-        async for chunk in deps.llm.stream(llm_messages, tier=ModelTier.CHEAP):
+        if first_chunk is not None:
+            parts.append(first_chunk)
+            yield first_chunk
+        async for chunk in llm_stream:
             parts.append(chunk)
             yield chunk
         # Persist the assistant reply in a fresh session once streaming completes.

@@ -6,8 +6,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.errors import UpstreamUnavailableError
-from app.llm.provider import GeminiProvider, ModelTier
+from app.errors import ConfigurationError, UpstreamUnavailableError
+from app.llm.provider import GeminiProvider, ModelTier, OpenAIProvider
 
 
 def _provider(monkeypatch: pytest.MonkeyPatch, responses: list[object]) -> GeminiProvider:
@@ -31,6 +31,53 @@ def _provider(monkeypatch: pytest.MonkeyPatch, responses: list[object]) -> Gemin
     )
     provider._record_usage = lambda _model, _resp: None
     return provider
+
+
+def _openai_settings(**overrides: object) -> SimpleNamespace:
+    values = {
+        "daily_llm_budget_usd": 2.0,
+        "openai_api_key": "sk-test",
+        "openai_base_url": "",
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _install_openai_stub(monkeypatch: pytest.MonkeyPatch) -> dict[str, object]:
+    captured: dict[str, object] = {}
+
+    class AsyncOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    openai_module = ModuleType("openai")
+    openai_module.AsyncOpenAI = AsyncOpenAI
+    monkeypatch.setitem(sys.modules, "openai", openai_module)
+    return captured
+
+
+def test_openai_provider_rejects_base_url_without_protocol():
+    with pytest.raises(ConfigurationError, match="OPENAI_BASE_URL"):
+        OpenAIProvider(_openai_settings(openai_base_url="api.openai.com/v1"))
+
+
+def test_openai_provider_ignores_blank_base_url(monkeypatch):
+    captured = _install_openai_stub(monkeypatch)
+
+    OpenAIProvider(_openai_settings(openai_base_url="   "))
+
+    assert captured == {"api_key": "sk-test", "base_url": "https://api.openai.com/v1"}
+
+
+def test_openai_provider_passes_valid_base_url(monkeypatch):
+    captured = _install_openai_stub(monkeypatch)
+
+    OpenAIProvider(_openai_settings(openai_base_url="https://api.openai.com/v1"))
+
+    assert captured == {
+        "api_key": "sk-test",
+        "base_url": "https://api.openai.com/v1",
+    }
 
 
 @pytest.mark.asyncio
