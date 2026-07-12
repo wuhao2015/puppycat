@@ -63,6 +63,41 @@ docker compose up --build
 This starts Postgres, the FastAPI backend (http://localhost:8001), and the Next.js
 frontend (http://localhost:3000).
 
+## Vercel frontend + this machine as backend
+
+The frontend can run on Vercel while the FastAPI backend and Postgres keep running on this
+machine. Vercel cannot reach `localhost`, so expose the backend with a stable public URL
+first, for example a Cloudflare Tunnel, Tailscale Funnel, ngrok, or a reverse proxy on your
+own domain.
+
+On this machine:
+
+```bash
+docker compose up -d --build db api
+curl http://localhost:8001/health
+```
+
+Use your tunnel to forward public HTTPS traffic to `http://localhost:8001`, then verify:
+
+```bash
+curl https://your-backend-host.example.com/health
+```
+
+In Vercel:
+
+1. Import this repository.
+2. Set **Root Directory** to `apps/web`.
+3. Keep the default Next.js framework settings, or use `npm ci` and `npm run build`.
+4. Add environment variables:
+   - `API_INTERNAL_BASE_URL=https://your-backend-host.example.com`
+   - `NEXT_PUBLIC_MAPBOX_TOKEN=<your Mapbox public token>` if you use maps
+5. Deploy.
+
+The browser calls `/api/...` on the Vercel site. Next.js rewrites those requests to
+`API_INTERNAL_BASE_URL`, so API keys and database access stay on this machine. API proxy
+responses are marked `no-store` in `apps/web/vercel.json` because they are authenticated
+and user-specific.
+
 ### 3. Run locally without Docker
 
 Backend:
