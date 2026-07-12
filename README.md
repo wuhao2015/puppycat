@@ -11,6 +11,10 @@ It is built for one user (you) but models `user_id` everywhere and hides infrast
 behind swappable interfaces, so growing to more users is a configuration change rather than
 a rewrite.
 
+## Current Status:
+This project is a working demo under active development. The core user flow is complete and tested locally. I am currently improving performance, UX, and deployment stability.
+Live Demo: [gopuppycat](https://puppycat-eight.vercel.app/)
+
 ## Architecture
 
 ```
