@@ -1,6 +1,21 @@
 # Environment
 .env
+.env.main
 
 # Misc
 plans.md
-newplan.md
+*plan.md
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+
+# Node.js / Next.js
+node_modules/
+.next/
+*.tsbuildinfo
+
+# Local build and editor files
+dist/
+.DS_Store
