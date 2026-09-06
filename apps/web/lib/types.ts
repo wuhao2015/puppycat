@@ -23,3 +23,36 @@ export type ProfileInput = {
   display_name: string | null;
   passport_countries: string[];
 };
+
+export type ChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+  ts: string;
+};
+
+export type TripListItem = {
+  id: string;
+  title: string | null;
+  destination: string | null;
+  start_date: string | null;
+  end_date: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Trip = TripListItem & {
+  preferences: {
+    interests?: string[];
+    budget?: string;
+    pace?: string;
+    travelers?: number;
+    notes?: string;
+  };
+  chat_messages: ChatMessage[];
+};
+
+export type ChatDevelopmentResponse = {
+  message: ChatMessage;
+  trip_updated_at: string;
+  assistant_status: "gemini_not_connected";
+};

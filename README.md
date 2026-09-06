@@ -1,19 +1,31 @@
 # Puppycat Travel
 
-Puppycat Travel is being rebuilt as a small travel-planning application. The current application includes the Puppycat visual shell, FastAPI configuration, the initial PostgreSQL schema, PostgreSQL caching, and account authentication. Trip APIs are not implemented yet.
+Puppycat Travel is being rebuilt as a small travel-planning application. The current application includes the Puppycat visual shell, account authentication, Trip management, and persisted Trip-scoped chat history. Gemini is intentionally not connected yet, so the UI saves user messages and shows the current development status without creating fake assistant replies.
 
 ## Project layout
 
 ```text
 apps/
   api/
-    app/       FastAPI configuration, database models, and authentication
+    app/       FastAPI configuration, database models, auth, and Trip APIs
+    tests/     PostgreSQL-backed API integration tests
     alembic/   Initial PostgreSQL migration
   web/         Next.js visual shell, authentication state, and account pages
 docker-compose.yml
 ```
 
 Registration uses the configured `SIGNUP_CODE`. After registering or signing in, the browser stores the access token locally, restores the account on refresh, and sends the token to protected API routes. The Profile page edits the display name and passport country codes.
+
+An authenticated user can create a Trip by sending the first message, reopen it at `/trips/{trip_id}`, rename or delete it from the Sidebar, and recover saved messages after a refresh. Every Trip read and mutation is scoped to its owner.
+
+The implemented Trip API surface is:
+
+- `POST /api/trips`
+- `GET /api/trips`
+- `GET /api/trips/{trip_id}`
+- `PATCH /api/trips/{trip_id}`
+- `DELETE /api/trips/{trip_id}`
+- `POST /api/trips/{trip_id}/chat`
 
 ## Start with Docker Compose
 
@@ -55,6 +67,26 @@ npm run dev
 ```
 
 When both applications run directly on the host, Next.js forwards `/api/*` requests to `http://localhost:8001` by default.
+
+## Run API tests
+
+The integration tests use an isolated PostgreSQL database on port 5433 and never load the project `.env` file:
+
+```bash
+docker compose --env-file /dev/null -f docker-compose.test.yml -p puppycat-test up -d --wait
+cd apps/api
+pip install -e '.[test]'
+DATABASE_URL=postgresql+asyncpg://puppycat_test:puppycat_test@127.0.0.1:5433/puppycat_test \
+JWT_SECRET=test-only-jwt-secret-at-least-32-bytes \
+SIGNUP_CODE=test-signup-code \
+alembic upgrade head
+DATABASE_URL=postgresql+asyncpg://puppycat_test:puppycat_test@127.0.0.1:5433/puppycat_test \
+JWT_SECRET=test-only-jwt-secret-at-least-32-bytes \
+SIGNUP_CODE=test-signup-code \
+pytest
+cd ../..
+docker compose --env-file /dev/null -f docker-compose.test.yml -p puppycat-test down
+```
 
 ## Vercel
 

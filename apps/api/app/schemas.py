@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import date, datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
@@ -82,3 +83,75 @@ class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     user: UserResponse
+
+
+class TripCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(default="New trip", min_length=1, max_length=100)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        title = value.strip()
+        if not title:
+            raise ValueError("Trip title cannot be empty")
+        return title
+
+
+class TripUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str = Field(min_length=1, max_length=100)
+
+    @field_validator("title")
+    @classmethod
+    def normalize_title(cls, value: str) -> str:
+        title = value.strip()
+        if not title:
+            raise ValueError("Trip title cannot be empty")
+        return title
+
+
+class ChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str
+    ts: datetime
+
+
+class TripListItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    title: str | None
+    destination: str | None
+    start_date: date | None
+    end_date: date | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TripResponse(TripListItemResponse):
+    preferences: dict[str, Any]
+    chat_messages: list[ChatMessage]
+
+
+class ChatRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user"] = "user"
+    content: str = Field(min_length=1, max_length=10_000)
+
+    @field_validator("content")
+    @classmethod
+    def normalize_content(cls, value: str) -> str:
+        content = value.strip()
+        if not content:
+            raise ValueError("Message cannot be empty")
+        return content
+
+
+class ChatDevelopmentResponse(BaseModel):
+    message: ChatMessage
+    trip_updated_at: datetime
+    assistant_status: Literal["gemini_not_connected"] = "gemini_not_connected"
