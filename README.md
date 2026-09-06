@@ -1,13 +1,15 @@
 # Puppycat Travel
 
-Puppycat Travel is being rebuilt as a small travel-planning application. This repository currently contains the Phase 0 foundation only: a minimal Next.js page, a FastAPI health endpoint, PostgreSQL, Docker Compose, and Vercel configuration.
+Puppycat Travel is being rebuilt as a small travel-planning application. The current foundation includes the Puppycat visual shell, FastAPI configuration, the initial PostgreSQL schema, and a concrete PostgreSQL cache. Authentication and trip APIs are not implemented yet.
 
 ## Project layout
 
 ```text
 apps/
-  api/   FastAPI application
-  web/   Next.js application
+  api/
+    app/       FastAPI configuration, database session, and models
+    alembic/   Initial PostgreSQL migration
+  web/         Next.js visual shell and static pages
 docker-compose.yml
 ```
 
@@ -36,8 +38,11 @@ cd apps/api
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .
+alembic upgrade head
 uvicorn app.main:app --reload --port 8001
 ```
+
+`alembic upgrade head` requires a running PostgreSQL instance and a matching `DATABASE_URL`. The API Docker image runs this migration automatically before starting Uvicorn.
 
 The web application requires Node.js 20.9 or newer:
 

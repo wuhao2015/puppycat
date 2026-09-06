@@ -20,6 +20,16 @@ services:
       context: ./apps/api
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-puppycat}:${POSTGRES_PASSWORD:-puppycat-local}@db:5432/${POSTGRES_DB:-puppycat}
+      JWT_SECRET: ${JWT_SECRET:-dev-only-change-before-deploying}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-10080}
+      SIGNUP_CODE: ${SIGNUP_CODE:-dev-invite-only}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_DEFAULT_MODEL: ${GEMINI_DEFAULT_MODEL:-gemini-3.7-flash}
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
     ports:
       - "8001:8000"
     depends_on:
@@ -31,6 +41,7 @@ services:
       context: ./apps/web
       args:
         API_INTERNAL_BASE_URL: http://api:8000
+        NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
     environment:
       API_INTERNAL_BASE_URL: http://api:8000
     ports:
