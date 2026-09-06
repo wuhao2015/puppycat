@@ -1,6 +1,49 @@
+"use client";
+
 import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { useEffect, useState, type FormEvent } from "react";
+
+import { useAuth } from "../../lib/auth";
 
 export default function RegisterPage() {
+  const router = useRouter();
+  const { user, loading: authLoading, register } = useAuth();
+  const [displayName, setDisplayName] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [signupCode, setSignupCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!authLoading && user) {
+      router.replace("/");
+    }
+  }, [authLoading, router, user]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      await register({
+        email,
+        password,
+        signup_code: signupCode,
+        ...(displayName.trim() ? { display_name: displayName.trim() } : {}),
+      });
+    } catch (requestError) {
+      setError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to create account",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   return (
     <main className="grid min-h-screen place-items-center bg-page px-5 py-10">
       <div className="w-full max-w-sm">
@@ -22,10 +65,13 @@ export default function RegisterPage() {
             </p>
           </div>
 
-          <form className="space-y-4">
+          <form className="space-y-4" onSubmit={handleSubmit}>
+            {error && <div className="notice-error">{error}</div>}
+
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-ink" htmlFor="display-name">
-                Display name <span className="font-normal text-gray-400">(optional)</span>
+                Display name{" "}
+                <span className="font-normal text-gray-400">(optional)</span>
               </label>
               <input
                 id="display-name"
@@ -34,6 +80,9 @@ export default function RegisterPage() {
                 autoComplete="name"
                 placeholder="How Puppycat should address you"
                 className="form-input"
+                maxLength={100}
+                value={displayName}
+                onChange={(event) => setDisplayName(event.target.value)}
               />
             </div>
 
@@ -48,6 +97,9 @@ export default function RegisterPage() {
                 autoComplete="email"
                 placeholder="you@example.com"
                 className="form-input"
+                required
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
               />
             </div>
 
@@ -62,6 +114,10 @@ export default function RegisterPage() {
                 autoComplete="new-password"
                 placeholder="At least 8 characters"
                 className="form-input"
+                minLength={8}
+                required
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
               />
             </div>
 
@@ -72,15 +128,18 @@ export default function RegisterPage() {
               <input
                 id="signup-code"
                 name="signup-code"
-                type="text"
+                type="password"
                 autoComplete="off"
                 placeholder="Enter your invitation code"
                 className="form-input"
+                required
+                value={signupCode}
+                onChange={(event) => setSignupCode(event.target.value)}
               />
             </div>
 
-            <button type="button" className="button-primary w-full">
-              Create account
+            <button type="submit" disabled={submitting} className="button-primary w-full">
+              {submitting ? "Creating account…" : "Create account"}
             </button>
           </form>
 

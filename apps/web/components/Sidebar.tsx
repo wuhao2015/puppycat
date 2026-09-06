@@ -1,11 +1,17 @@
-import { Plus, Settings, UserRound } from "lucide-react";
+"use client";
+
+import { LogOut, Plus, Settings, UserRound } from "lucide-react";
 import Link from "next/link";
+
+import { useAuth } from "../lib/auth";
 
 type SidebarProps = {
   activePage: "workspace" | "settings";
 };
 
 export default function Sidebar({ activePage }: SidebarProps) {
+  const { user, signOut } = useAuth();
+
   return (
     <aside className="hidden h-screen w-72 shrink-0 flex-col border-r border-line bg-white md:flex">
       <div className="px-4 py-4">
@@ -61,12 +67,21 @@ export default function Sidebar({ activePage }: SidebarProps) {
           </span>
           <span className="min-w-0">
             <span className="block truncate text-xs font-medium text-gray-700">
-              Guest traveller
+              {user?.display_name || user?.email || "Traveller"}
             </span>
             <span className="block truncate text-[11px] text-gray-400">
-              Profile not connected
+              {user?.email}
             </span>
           </span>
+          <button
+            type="button"
+            onClick={signOut}
+            title="Sign out"
+            aria-label="Sign out"
+            className="ml-auto rounded-lg p-2 text-gray-400 transition-colors hover:bg-gray-100 hover:text-brand"
+          >
+            <LogOut aria-hidden="true" size={15} />
+          </button>
         </div>
       </div>
     </aside>
