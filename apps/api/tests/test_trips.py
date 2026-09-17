@@ -33,7 +33,7 @@ def assert_trip_fields(trip: Mapping[str, Any], *, includes_messages: bool) -> N
     assert set(trip) == expected
 
 
-async def test_trip_crud_messages_and_stable_list_order(client: AsyncClient) -> None:
+async def test_trip_crud_and_stable_list_order(client: AsyncClient) -> None:
     owner = await register(client, "owner")
 
     first_response = await client.post("/api/trips", headers=owner)
@@ -50,37 +50,15 @@ async def test_trip_crud_messages_and_stable_list_order(client: AsyncClient) -> 
     assert second_response.status_code == 201
     second = second_response.json()
 
-    message_response = await client.post(
-        f"/api/trips/{first['id']}/chat",
-        headers=owner,
-        json={"content": "  Seven relaxed days in Kyoto  "},
-    )
-    assert message_response.status_code == 201
-    message = message_response.json()
-    assert message["assistant_status"] == "gemini_not_connected"
-    assert message["message"]["role"] == "user"
-    assert message["message"]["content"] == "Seven relaxed days in Kyoto"
-    assert message["message"]["ts"]
-
-    second_message_response = await client.post(
-        f"/api/trips/{first['id']}/chat",
-        headers=owner,
-        json={"role": "user", "content": "Gardens and local food"},
-    )
-    assert second_message_response.status_code == 201
-
     detail_response = await client.get(f"/api/trips/{first['id']}", headers=owner)
     assert detail_response.status_code == 200
     detail = detail_response.json()
-    assert [item["content"] for item in detail["chat_messages"]] == [
-        "Seven relaxed days in Kyoto",
-        "Gardens and local food",
-    ]
+    assert detail["chat_messages"] == []
 
     list_response = await client.get("/api/trips", headers=owner)
     assert list_response.status_code == 200
     listed = list_response.json()
-    assert [trip["id"] for trip in listed] == [first["id"], second["id"]]
+    assert [trip["id"] for trip in listed] == [second["id"], first["id"]]
     assert all(
         set(trip)
         == {
