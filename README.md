@@ -1,6 +1,6 @@
 # Puppycat Travel
 
-Puppycat Travel is being rebuilt as a small travel-planning application. The current application includes the Puppycat visual shell, account authentication, Trip management, and persisted Trip-scoped chat history. Gemini is intentionally not connected yet, so the UI saves user messages and shows the current development status without creating fake assistant replies.
+Puppycat Travel is being rebuilt as a small travel-planning application. The current application includes the Puppycat visual shell, account authentication, Trip management, and persisted Trip-scoped Gemini chat with streamed replies.
 
 ## Project layout
 

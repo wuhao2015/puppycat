@@ -1,11 +1,16 @@
-from fastapi import APIRouter, Body, Depends, Response, status
+import json
+from collections.abc import AsyncGenerator
+
+from fastapi import APIRouter, Body, Depends, Request, Response, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import get_current_user, get_owned_trip
+from app.clients import AppClients
 from app.db import get_session
+from app.errors import GeminiError
 from app.models import Trip, User
 from app.schemas import (
-    ChatDevelopmentResponse,
     ChatRequest,
     TripCreate,
     TripResponse,
@@ -13,7 +18,9 @@ from app.schemas import (
     TripUpdate,
 )
 from app.trips import (
+    append_assistant_message,
     append_user_message,
+    build_chat_context,
     create_trip,
     delete_trip,
     list_trips,
@@ -22,6 +29,12 @@ from app.trips import (
 
 
 router = APIRouter(prefix="/api/trips", tags=["trips"])
+
+
+def _stream_event(event_type: str, **payload: object) -> bytes:
+    event = {"type": event_type, **payload}
+    line = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+    return f"{line}\n".encode("utf-8")
 
 
 @router.post("", response_model=TripResponse, status_code=status.HTTP_201_CREATED)
@@ -75,21 +88,57 @@ async def destroy(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-@router.post(
-    "/{trip_id}/chat",
-    response_model=ChatDevelopmentResponse,
-    status_code=status.HTTP_201_CREATED,
-)
+@router.post("/{trip_id}/chat")
 async def chat(
     trip_id: str,
-    request: ChatRequest,
+    chat_request: ChatRequest,
+    request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> ChatDevelopmentResponse:
-    trip, message = await append_user_message(
+) -> StreamingResponse:
+    trip, _user_message = await append_user_message(
         session,
         trip_id=trip_id,
         current_user=current_user,
-        content=request.content,
+        content=chat_request.content,
     )
-    return ChatDevelopmentResponse(message=message, trip_updated_at=trip.updated_at)
+    clients: AppClients = request.app.state.clients
+    gemini_stream = clients.gemini.stream_text(build_chat_context(trip))
+    try:
+        first_chunk = await anext(gemini_stream)
+    except BaseException:
+        await gemini_stream.aclose()
+        raise
+
+    async def response_body() -> AsyncGenerator[bytes, None]:
+        assistant_parts = [first_chunk]
+        try:
+            yield _stream_event("chunk", content=first_chunk)
+            async for chunk in gemini_stream:
+                assistant_parts.append(chunk)
+                yield _stream_event("chunk", content=chunk)
+
+            updated_trip, assistant_message = await append_assistant_message(
+                session,
+                trip=trip,
+                content="".join(assistant_parts),
+            )
+            yield _stream_event(
+                "done",
+                message=assistant_message.model_dump(mode="json"),
+                trip_updated_at=updated_trip.updated_at.isoformat(),
+            )
+        except GeminiError as error:
+            yield _stream_event("error", detail=error.detail())
+        finally:
+            await gemini_stream.aclose()
+
+    return StreamingResponse(
+        response_body(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

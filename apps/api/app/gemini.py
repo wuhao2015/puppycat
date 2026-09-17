@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 import time
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -190,7 +190,7 @@ class GeminiClient:
 
     async def stream_text(
         self, messages: Sequence[GeminiMessage]
-    ) -> AsyncIterator[str]:
+    ) -> AsyncGenerator[str, None]:
         sdk = self._require_sdk()
         contents, system_instruction = _prepare_messages(messages)
         await self._ensure_catalog_current()

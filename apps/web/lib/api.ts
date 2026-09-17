@@ -30,14 +30,22 @@ function errorDetail(body: unknown): string | null {
       .filter((message): message is string => message !== null);
     return messages.length > 0 ? messages.join(". ") : null;
   }
+  if (
+    detail &&
+    typeof detail === "object" &&
+    "message" in detail &&
+    typeof detail.message === "string"
+  ) {
+    return detail.message;
+  }
   return null;
 }
 
-export async function apiRequest<T>(
+export async function apiFetch(
   path: string,
   init: RequestInit = {},
   token?: string,
-): Promise<T> {
+): Promise<Response> {
   const headers = new Headers(init.headers);
   if (init.body !== undefined) {
     headers.set("Content-Type", "application/json");
@@ -59,6 +67,16 @@ export async function apiRequest<T>(
       errorDetail(body) ?? `Request failed (${response.status})`,
     );
   }
+
+  return response;
+}
+
+export async function apiRequest<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string,
+): Promise<T> {
+  const response = await apiFetch(path, init, token);
 
   if (response.status === 204) {
     return undefined as T;

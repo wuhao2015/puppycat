@@ -13,6 +13,7 @@ import {
 
 import {
   ApiError,
+  apiFetch,
   apiRequest,
   getMe,
   login as loginRequest,
@@ -30,6 +31,7 @@ type AuthContextValue = {
   register: (input: RegisterInput) => Promise<void>;
   updateProfile: (input: ProfileInput) => Promise<void>;
   request: <T>(path: string, init?: RequestInit) => Promise<T>;
+  requestResponse: (path: string, init?: RequestInit) => Promise<Response>;
   signOut: () => void;
 };
 
@@ -121,6 +123,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [clearSession, handleUnauthorized, router, token],
   );
 
+  const requestResponse = useCallback(
+    async (path: string, init?: RequestInit): Promise<Response> => {
+      if (!token) {
+        clearSession();
+        router.replace("/login");
+        throw new ApiError(401, "Authentication required");
+      }
+
+      try {
+        return await apiFetch(path, init, token);
+      } catch (error) {
+        handleUnauthorized(error);
+        throw error;
+      }
+    },
+    [clearSession, handleUnauthorized, router, token],
+  );
+
   const updateProfile = useCallback(
     async (input: ProfileInput) => {
       if (!token) {
@@ -145,8 +165,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [clearSession, router]);
 
   const value = useMemo(
-    () => ({ user, loading, login, register, updateProfile, request, signOut }),
-    [loading, login, register, request, signOut, updateProfile, user],
+    () => ({
+      user,
+      loading,
+      login,
+      register,
+      updateProfile,
+      request,
+      requestResponse,
+      signOut,
+    }),
+    [
+      loading,
+      login,
+      register,
+      request,
+      requestResponse,
+      signOut,
+      updateProfile,
+      user,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

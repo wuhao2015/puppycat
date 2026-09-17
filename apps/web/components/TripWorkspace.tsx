@@ -17,7 +17,7 @@ import {
 } from "react";
 
 import { useTrips } from "../lib/trips";
-import type { Trip } from "../lib/types";
+import type { ChatMessage, Trip } from "../lib/types";
 
 type TripWorkspaceProps = {
   tripId?: string;
@@ -25,13 +25,15 @@ type TripWorkspaceProps = {
 
 export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
   const router = useRouter();
-  const { trips, createTrip, getTrip, appendMessage } = useTrips();
+  const { trips, createTrip, getTrip, streamMessage } = useTrips();
   const [trip, setTrip] = useState<Trip | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(Boolean(tripId));
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const sendingRef = useRef(false);
+  const streamControllerRef = useRef<AbortController | null>(null);
   const displayTitle =
     (tripId ? trips.find((item) => item.id === tripId)?.title : null) ??
     trip?.title ??
@@ -77,19 +79,29 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ block: "end" });
-  }, [trip?.chat_messages.length]);
+  }, [trip?.chat_messages.at(-1)?.content]);
+
+  useEffect(
+    () => () => {
+      streamControllerRef.current?.abort();
+    },
+    [tripId],
+  );
 
   async function sendMessage(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
     const content = message.trim();
-    if (!content || sending) {
+    if (!content || sendingRef.current) {
       return;
     }
 
+    sendingRef.current = true;
     setSending(true);
     setError(null);
     let currentTrip = trip;
     let createdTrip: Trip | null = null;
+    let pendingAssistantTimestamp: string | null = null;
+    let controller: AbortController | null = null;
 
     try {
       if (!currentTrip) {
@@ -97,26 +109,98 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
         currentTrip = createdTrip;
         setTrip(createdTrip);
       }
+      const activeTripId = currentTrip.id;
 
-      const response = await appendMessage(currentTrip.id, content);
+      const userMessage: ChatMessage = {
+        role: "user",
+        content,
+        ts: new Date().toISOString(),
+      };
+      pendingAssistantTimestamp = `pending-${Date.now()}`;
+      const pendingAssistant: ChatMessage = {
+        role: "assistant",
+        content: "",
+        ts: pendingAssistantTimestamp,
+      };
       setTrip({
         ...currentTrip,
-        chat_messages: [...currentTrip.chat_messages, response.message],
-        updated_at: response.trip_updated_at,
+        chat_messages: [
+          ...currentTrip.chat_messages,
+          userMessage,
+          pendingAssistant,
+        ],
       });
       setMessage("");
+
+      controller = new AbortController();
+      streamControllerRef.current = controller;
+      const response = await streamMessage(
+        activeTripId,
+        content,
+        (chunk) => {
+          setTrip((activeTrip) => {
+            if (!activeTrip || activeTrip.id !== activeTripId) {
+              return activeTrip;
+            }
+            return {
+              ...activeTrip,
+              chat_messages: activeTrip.chat_messages.map((chatMessage) =>
+                chatMessage.ts === pendingAssistantTimestamp
+                  ? { ...chatMessage, content: chatMessage.content + chunk }
+                  : chatMessage,
+              ),
+            };
+          });
+        },
+        controller.signal,
+      );
+      setTrip((activeTrip) => {
+        if (!activeTrip || activeTrip.id !== activeTripId) {
+          return activeTrip;
+        }
+        return {
+          ...activeTrip,
+          chat_messages: activeTrip.chat_messages.map((chatMessage) =>
+            chatMessage.ts === pendingAssistantTimestamp
+              ? response.message
+              : chatMessage,
+          ),
+          updated_at: response.trip_updated_at,
+        };
+      });
 
       if (createdTrip) {
         router.replace(`/trips/${createdTrip.id}`);
       }
     } catch (requestError) {
+      if (pendingAssistantTimestamp) {
+        setTrip((activeTrip) => {
+          if (!activeTrip) {
+            return activeTrip;
+          }
+          return {
+            ...activeTrip,
+            chat_messages: activeTrip.chat_messages.filter(
+              (chatMessage) => chatMessage.ts !== pendingAssistantTimestamp,
+            ),
+          };
+        });
+      }
       if (createdTrip) {
         router.replace(`/trips/${createdTrip.id}`);
       }
-      setError(
-        requestError instanceof Error ? requestError.message : "Unable to save message",
-      );
+      if (!controller?.signal.aborted) {
+        setError(
+          requestError instanceof Error
+            ? requestError.message
+            : "Unable to send message",
+        );
+      }
     } finally {
+      if (streamControllerRef.current === controller) {
+        streamControllerRef.current = null;
+      }
+      sendingRef.current = false;
       setSending(false);
     }
   }
@@ -177,7 +261,14 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
                       : "bg-gray-100 text-gray-800"
                   }`}
                 >
-                  {chatMessage.content}
+                  {chatMessage.content ||
+                  (sending && index === trip.chat_messages.length - 1 ? (
+                    <span className="loading-dots" aria-label="Puppycat is replying">
+                      <span>●</span>
+                      <span>●</span>
+                      <span>●</span>
+                    </span>
+                  ) : null)}
                 </div>
               </div>
             ))}
@@ -186,10 +277,6 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
         </div>
 
         <div className="space-y-2 border-t border-line p-3">
-          <p className="rounded-lg border border-brand/20 bg-brand/5 px-3 py-2 text-xs leading-5 text-gray-600">
-            Gemini chat is not connected yet. Messages are saved now; Puppycat
-            replies arrive in Phase 6.
-          </p>
           <form className="flex items-end gap-2" onSubmit={sendMessage}>
             <textarea
               aria-label="Trip message"

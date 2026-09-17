@@ -51,8 +51,7 @@ export type Trip = TripListItem & {
   chat_messages: ChatMessage[];
 };
 
-export type ChatDevelopmentResponse = {
+export type ChatStreamResult = {
   message: ChatMessage;
   trip_updated_at: string;
-  assistant_status: "gemini_not_connected";
 };

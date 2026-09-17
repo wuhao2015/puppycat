@@ -12,10 +12,16 @@ import {
 
 import { useAuth } from "./auth";
 import type {
-  ChatDevelopmentResponse,
+  ChatMessage,
+  ChatStreamResult,
   Trip,
   TripListItem,
 } from "./types";
+
+type ChatStreamEvent =
+  | { type: "chunk"; content: string }
+  | { type: "done"; message: ChatMessage; trip_updated_at: string }
+  | { type: "error"; detail: { code: string; message: string } };
 
 type TripsContextValue = {
   trips: TripListItem[];
@@ -25,10 +31,12 @@ type TripsContextValue = {
   getTrip: (tripId: string) => Promise<Trip>;
   renameTrip: (tripId: string, title: string) => Promise<Trip>;
   deleteTrip: (tripId: string) => Promise<void>;
-  appendMessage: (
+  streamMessage: (
     tripId: string,
     content: string,
-  ) => Promise<ChatDevelopmentResponse>;
+    onChunk: (chunk: string) => void,
+    signal: AbortSignal,
+  ) => Promise<ChatStreamResult>;
 };
 
 const TripsContext = createContext<TripsContextValue | null>(null);
@@ -43,7 +51,7 @@ function asListItem(trip: Trip): TripListItem {
 }
 
 export function TripsProvider({ children }: { children: ReactNode }) {
-  const { user, loading: authLoading, request } = useAuth();
+  const { user, loading: authLoading, request, requestResponse } = useAuth();
   const [trips, setTrips] = useState<TripListItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -134,27 +142,86 @@ export function TripsProvider({ children }: { children: ReactNode }) {
     [request],
   );
 
-  const appendMessage = useCallback(
-    async (tripId: string, content: string) => {
-      const response = await request<ChatDevelopmentResponse>(
-        `/api/trips/${tripId}/chat`,
-        {
-          method: "POST",
-          body: JSON.stringify({ content }),
-        },
-      );
+  const streamMessage = useCallback(
+    async (
+      tripId: string,
+      content: string,
+      onChunk: (chunk: string) => void,
+      signal: AbortSignal,
+    ): Promise<ChatStreamResult> => {
+      const response = await requestResponse(`/api/trips/${tripId}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ content }),
+        signal,
+      });
+      if (!response.body) {
+        throw new Error("Puppycat returned an empty response");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      const streamState: { completed: ChatStreamResult | null } = {
+        completed: null,
+      };
+
+      function consumeLine(line: string) {
+        if (!line.trim()) {
+          return;
+        }
+        const event = JSON.parse(line) as ChatStreamEvent;
+        if (event.type === "chunk") {
+          onChunk(event.content);
+          return;
+        }
+        if (event.type === "error") {
+          throw new Error(event.detail.message);
+        }
+        if (event.type === "done") {
+          streamState.completed = {
+            message: event.message,
+            trip_updated_at: event.trip_updated_at,
+          };
+        }
+      }
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          buffer += decoder.decode(value, { stream: true });
+          let newlineIndex = buffer.indexOf("\n");
+          while (newlineIndex >= 0) {
+            consumeLine(buffer.slice(0, newlineIndex));
+            buffer = buffer.slice(newlineIndex + 1);
+            newlineIndex = buffer.indexOf("\n");
+          }
+        }
+        buffer += decoder.decode();
+        consumeLine(buffer);
+      } finally {
+        reader.releaseLock();
+      }
+
+      if (!streamState.completed) {
+        throw new Error("Puppycat's response was interrupted. Please try again.");
+      }
+      const result = streamState.completed;
+
       setTrips((current) =>
         current
           .map((trip) =>
             trip.id === tripId
-              ? { ...trip, updated_at: response.trip_updated_at }
+              ? { ...trip, updated_at: result.trip_updated_at }
               : trip,
           )
           .sort(newestFirst),
       );
-      return response;
+      return result;
     },
-    [request],
+    [requestResponse],
   );
 
   const value = useMemo(
@@ -166,16 +233,16 @@ export function TripsProvider({ children }: { children: ReactNode }) {
       getTrip,
       renameTrip,
       deleteTrip,
-      appendMessage,
+      streamMessage,
     }),
     [
-      appendMessage,
       createTrip,
       deleteTrip,
       error,
       getTrip,
       loading,
       renameTrip,
+      streamMessage,
       trips,
     ],
   );

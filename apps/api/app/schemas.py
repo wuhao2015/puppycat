@@ -149,9 +149,3 @@ class ChatRequest(BaseModel):
         if not content:
             raise ValueError("Message cannot be empty")
         return content
-
-
-class ChatDevelopmentResponse(BaseModel):
-    message: ChatMessage
-    trip_updated_at: datetime
-    assistant_status: Literal["gemini_not_connected"] = "gemini_not_connected"
