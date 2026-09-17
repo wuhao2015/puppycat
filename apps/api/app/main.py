@@ -16,8 +16,8 @@ from app.routes.trips import router as trips_router
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     clients = AppClients.create(settings)
     app.state.clients = clients
-    await clients.start()
     try:
+        await clients.start()
         yield
     finally:
         await clients.close()
