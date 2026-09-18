@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.clients import AppClients
 from app.config import settings
-from app.errors import GeminiError
+from app.errors import GeminiError, PlanningError
 from app.routes.auth import router as auth_router
 from app.routes.trips import router as trips_router
 
@@ -37,6 +37,16 @@ app.include_router(trips_router)
 @app.exception_handler(GeminiError)
 async def handle_gemini_error(
     _request: Request, error: GeminiError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=error.status_code,
+        content={"detail": error.detail()},
+    )
+
+
+@app.exception_handler(PlanningError)
+async def handle_planning_error(
+    _request: Request, error: PlanningError
 ) -> JSONResponse:
     return JSONResponse(
         status_code=error.status_code,

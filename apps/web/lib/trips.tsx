@@ -14,6 +14,7 @@ import { useAuth } from "./auth";
 import type {
   ChatMessage,
   ChatStreamResult,
+  ItineraryResponse,
   Trip,
   TripListItem,
 } from "./types";
@@ -31,6 +32,7 @@ type TripsContextValue = {
   getTrip: (tripId: string) => Promise<Trip>;
   renameTrip: (tripId: string, title: string) => Promise<Trip>;
   deleteTrip: (tripId: string) => Promise<void>;
+  planTrip: (tripId: string) => Promise<ItineraryResponse>;
   streamMessage: (
     tripId: string,
     content: string,
@@ -46,7 +48,12 @@ function newestFirst(left: TripListItem, right: TripListItem): number {
 }
 
 function asListItem(trip: Trip): TripListItem {
-  const { preferences: _preferences, chat_messages: _chatMessages, ...item } = trip;
+  const {
+    preferences: _preferences,
+    chat_messages: _chatMessages,
+    latest_itinerary: _latestItinerary,
+    ...item
+  } = trip;
   return item;
 }
 
@@ -142,6 +149,14 @@ export function TripsProvider({ children }: { children: ReactNode }) {
     [request],
   );
 
+  const planTrip = useCallback(
+    (tripId: string) =>
+      request<ItineraryResponse>(`/api/trips/${tripId}/plan`, {
+        method: "POST",
+      }),
+    [request],
+  );
+
   const streamMessage = useCallback(
     async (
       tripId: string,
@@ -233,6 +248,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
       getTrip,
       renameTrip,
       deleteTrip,
+      planTrip,
       streamMessage,
     }),
     [
@@ -241,6 +257,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
       error,
       getTrip,
       loading,
+      planTrip,
       renameTrip,
       streamMessage,
       trips,

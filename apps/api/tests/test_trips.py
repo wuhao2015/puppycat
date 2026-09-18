@@ -29,7 +29,7 @@ def assert_trip_fields(trip: Mapping[str, Any], *, includes_messages: bool) -> N
         "updated_at",
     }
     if includes_messages:
-        expected.update({"preferences", "chat_messages"})
+        expected.update({"preferences", "chat_messages", "latest_itinerary"})
     assert set(trip) == expected
 
 

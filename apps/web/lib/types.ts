@@ -30,6 +30,76 @@ export type ChatMessage = {
   ts: string;
 };
 
+export type PlaceCoordinate = {
+  latitude: number;
+  longitude: number;
+};
+
+export type Place = {
+  place_id: string;
+  name: string;
+  address: string | null;
+  location: PlaceCoordinate | null;
+  google_maps_uri: string | null;
+  website_uri: string | null;
+  business_status: string | null;
+};
+
+export type ItineraryWarning = {
+  level: "caution" | "blocker";
+  code: string;
+  message: string;
+  source: "google_places" | "open_meteo" | "tavily" | null;
+  item_id: string | null;
+  source_url: string | null;
+};
+
+export type ItineraryItem = {
+  id: string;
+  start_time: string;
+  end_time: string;
+  title: string;
+  description: string;
+  kind: "place" | "generic";
+  place_id: string | null;
+  place: Place | null;
+  warnings: ItineraryWarning[];
+};
+
+export type ItineraryDay = {
+  date: string;
+  title: string;
+  accommodation: string | null;
+  items: ItineraryItem[];
+};
+
+export type DailyWeather = {
+  date: string;
+  summary: string;
+  temperature_max_c: number | null;
+  temperature_min_c: number | null;
+};
+
+export type Itinerary = {
+  destination: string;
+  destination_location: PlaceCoordinate | null;
+  start_date: string;
+  end_date: string;
+  days: ItineraryDay[];
+  weather: DailyWeather[];
+  warnings: ItineraryWarning[];
+  verification_status: "verified" | "partial" | "unavailable";
+  verified_sources: string[];
+  unavailable_sources: string[];
+};
+
+export type ItineraryResponse = {
+  id: string;
+  trip_id: string;
+  data: Itinerary;
+  created_at: string;
+};
+
 export type TripListItem = {
   id: string;
   title: string | null;
@@ -49,6 +119,7 @@ export type Trip = TripListItem & {
     notes?: string;
   };
   chat_messages: ChatMessage[];
+  latest_itinerary: ItineraryResponse | null;
 };
 
 export type ChatStreamResult = {

@@ -25,11 +25,13 @@ type TripWorkspaceProps = {
 
 export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
   const router = useRouter();
-  const { trips, createTrip, getTrip, streamMessage } = useTrips();
+  const { trips, createTrip, getTrip, planTrip, streamMessage } = useTrips();
   const [trip, setTrip] = useState<Trip | null>(null);
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(Boolean(tripId));
   const [sending, setSending] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const [planningError, setPlanningError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -44,12 +46,14 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
       setTrip(null);
       setLoading(false);
       setError(null);
+      setPlanningError(null);
       return;
     }
 
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setPlanningError(null);
     getTrip(tripId)
       .then((loadedTrip) => {
         if (!cancelled) {
@@ -212,6 +216,32 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
     }
   }
 
+  async function createOrUpdatePlan() {
+    if (!trip || planning) {
+      return;
+    }
+    setPlanning(true);
+    setPlanningError(null);
+    try {
+      const activeTripId = trip.id;
+      await planTrip(activeTripId);
+      const updatedTrip = await getTrip(activeTripId);
+      setTrip((currentTrip) =>
+        currentTrip?.id === activeTripId ? updatedTrip : currentTrip,
+      );
+    } catch (requestError) {
+      setPlanningError(
+        requestError instanceof Error
+          ? requestError.message
+          : "Unable to create itinerary",
+      );
+    } finally {
+      setPlanning(false);
+    }
+  }
+
+  const itinerary = trip?.latest_itinerary?.data ?? null;
+
   return (
     <div className="grid h-full min-h-0 min-w-0 grid-cols-1 lg:grid-cols-2">
       <section
@@ -301,9 +331,29 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
               <span className="sr-only">Send message</span>
             </button>
           </form>
-          <button type="button" disabled className="button-secondary w-full">
-            <RefreshCw aria-hidden="true" size={15} />
-            Create plan
+          {planningError && <div className="notice-error">{planningError}</div>}
+          <button
+            type="button"
+            disabled={
+              loading ||
+              sending ||
+              planning ||
+              !trip ||
+              !trip.chat_messages.some((chatMessage) => chatMessage.role === "user")
+            }
+            className="button-secondary w-full"
+            onClick={createOrUpdatePlan}
+          >
+            <RefreshCw
+              aria-hidden="true"
+              className={planning ? "animate-spin" : undefined}
+              size={15}
+            />
+            {planning
+              ? "Planning…"
+              : itinerary
+                ? "Update plan"
+                : "Create plan"}
           </button>
         </div>
       </section>
@@ -322,28 +372,104 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
             </p>
           </div>
           <span className="rounded-full border border-brand/20 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand">
-            Not created
+            {itinerary
+              ? itinerary.verification_status === "verified"
+                ? "Verified"
+                : itinerary.verification_status === "partial"
+                  ? "Partially verified"
+                  : "Verification unavailable"
+              : "Not created"}
           </span>
         </div>
 
-        <div className="panel flex min-h-[calc(100%_-_4.5rem)] items-center justify-center border-dashed p-8 text-center">
-          <div className="max-w-sm">
-            <span className="mx-auto grid size-12 place-items-center rounded-xl bg-brand/10 text-brand">
-              <MapPinned aria-hidden="true" size={22} />
-            </span>
-            <h3 className="mt-4 text-sm font-semibold text-ink">
-              Your trip starts with a conversation
-            </h3>
-            <p className="mt-1.5 text-sm leading-6 text-gray-500">
-              Share your destination, dates, and preferences in chat. Your daily
-              itinerary, map, and travel notes will live in this Guide.
-            </p>
-            <div className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-brand">
-              <Compass aria-hidden="true" size={14} />
-              Ready when you are
+        {itinerary ? (
+          <div className="space-y-4">
+            {itinerary.warnings.map((warning, index) => (
+              <div
+                key={`${warning.code}-${index}`}
+                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+              >
+                {warning.source_url ? (
+                  <a
+                    href={warning.source_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                  >
+                    {warning.message}
+                  </a>
+                ) : (
+                  warning.message
+                )}
+              </div>
+            ))}
+            {itinerary.days.map((day, dayIndex) => (
+              <article key={day.date} className="panel p-4">
+                <p className="text-xs font-medium uppercase tracking-wide text-brand">
+                  Day {dayIndex + 1} · {day.date}
+                </p>
+                <h3 className="mt-1 text-base font-semibold text-ink">{day.title}</h3>
+                {day.accommodation && (
+                  <p className="mt-1 text-xs text-gray-500">
+                    Stay: {day.accommodation}
+                  </p>
+                )}
+                <div className="mt-4 space-y-4 border-l border-brand/20 pl-4">
+                  {day.items.map((item) => (
+                    <div key={item.id}>
+                      <p className="text-xs font-medium text-brand">
+                        {item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}
+                      </p>
+                      <h4 className="mt-0.5 text-sm font-semibold text-ink">
+                        {item.place?.google_maps_uri ? (
+                          <a
+                            href={item.place.google_maps_uri}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="hover:underline"
+                          >
+                            {item.title}
+                          </a>
+                        ) : (
+                          item.title
+                        )}
+                      </h4>
+                      {item.description && (
+                        <p className="mt-1 text-sm leading-6 text-gray-600">
+                          {item.description}
+                        </p>
+                      )}
+                      {item.warnings.map((warning) => (
+                        <p key={warning.code} className="mt-1 text-xs text-amber-700">
+                          {warning.message}
+                        </p>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="panel flex min-h-[calc(100%_-_4.5rem)] items-center justify-center border-dashed p-8 text-center">
+            <div className="max-w-sm">
+              <span className="mx-auto grid size-12 place-items-center rounded-xl bg-brand/10 text-brand">
+                <MapPinned aria-hidden="true" size={22} />
+              </span>
+              <h3 className="mt-4 text-sm font-semibold text-ink">
+                Your trip starts with a conversation
+              </h3>
+              <p className="mt-1.5 text-sm leading-6 text-gray-500">
+                Share your destination, dates, and preferences in chat. Your daily
+                itinerary, map, and travel notes will live in this Guide.
+              </p>
+              <div className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-brand">
+                <Compass aria-hidden="true" size={14} />
+                Ready when you are
+              </div>
             </div>
           </div>
-        </div>
+        )}
       </section>
     </div>
   );

@@ -10,8 +10,10 @@ from app.clients import AppClients
 from app.db import get_session
 from app.errors import GeminiError
 from app.models import Trip, User
+from app.planner import generate_plan, latest_itinerary
 from app.schemas import (
     ChatRequest,
+    ItineraryResponse,
     TripCreate,
     TripResponse,
     TripListItemResponse,
@@ -42,8 +44,9 @@ async def create(
     request: TripCreate = Body(default_factory=TripCreate),
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> Trip:
-    return await create_trip(session, current_user=current_user, title=request.title)
+) -> TripResponse:
+    trip = await create_trip(session, current_user=current_user, title=request.title)
+    return _trip_response(trip)
 
 
 @router.get("", response_model=list[TripListItemResponse])
@@ -59,8 +62,10 @@ async def show(
     trip_id: str,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> Trip:
-    return await get_owned_trip(session, trip_id=trip_id, current_user=current_user)
+) -> TripResponse:
+    trip = await get_owned_trip(session, trip_id=trip_id, current_user=current_user)
+    itinerary = await latest_itinerary(session, trip.id)
+    return _trip_response(trip, itinerary=itinerary)
 
 
 @router.patch("/{trip_id}", response_model=TripResponse)
@@ -69,13 +74,15 @@ async def update(
     request: TripUpdate,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> Trip:
-    return await rename_trip(
+) -> TripResponse:
+    trip = await rename_trip(
         session,
         trip_id=trip_id,
         current_user=current_user,
         title=request.title,
     )
+    itinerary = await latest_itinerary(session, trip.id)
+    return _trip_response(trip, itinerary=itinerary)
 
 
 @router.delete("/{trip_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -141,4 +148,34 @@ async def chat(
             "X-Accel-Buffering": "no",
             "X-Content-Type-Options": "nosniff",
         },
+    )
+
+
+@router.post("/{trip_id}/plan", response_model=ItineraryResponse)
+async def plan(
+    trip_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> ItineraryResponse:
+    trip = await get_owned_trip(
+        session,
+        trip_id=trip_id,
+        current_user=current_user,
+    )
+    clients: AppClients = request.app.state.clients
+    itinerary = await generate_plan(session, trip=trip, clients=clients)
+    return ItineraryResponse.model_validate(itinerary)
+
+
+def _trip_response(
+    trip: Trip,
+    *,
+    itinerary: object | None = None,
+) -> TripResponse:
+    response = TripResponse.model_validate(trip)
+    if itinerary is None:
+        return response
+    return response.model_copy(
+        update={"latest_itinerary": ItineraryResponse.model_validate(itinerary)}
     )
