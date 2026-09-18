@@ -18,6 +18,7 @@ import {
 
 import { useTrips } from "../lib/trips";
 import type { ChatMessage, Trip } from "../lib/types";
+import TripGuide from "./TripGuide";
 
 type TripWorkspaceProps = {
   tripId?: string;
@@ -383,73 +384,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
         </div>
 
         {itinerary ? (
-          <div className="space-y-4">
-            {itinerary.warnings.map((warning, index) => (
-              <div
-                key={`${warning.code}-${index}`}
-                className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-              >
-                {warning.source_url ? (
-                  <a
-                    href={warning.source_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline"
-                  >
-                    {warning.message}
-                  </a>
-                ) : (
-                  warning.message
-                )}
-              </div>
-            ))}
-            {itinerary.days.map((day, dayIndex) => (
-              <article key={day.date} className="panel p-4">
-                <p className="text-xs font-medium uppercase tracking-wide text-brand">
-                  Day {dayIndex + 1} · {day.date}
-                </p>
-                <h3 className="mt-1 text-base font-semibold text-ink">{day.title}</h3>
-                {day.accommodation && (
-                  <p className="mt-1 text-xs text-gray-500">
-                    Stay: {day.accommodation}
-                  </p>
-                )}
-                <div className="mt-4 space-y-4 border-l border-brand/20 pl-4">
-                  {day.items.map((item) => (
-                    <div key={item.id}>
-                      <p className="text-xs font-medium text-brand">
-                        {item.start_time.slice(0, 5)}–{item.end_time.slice(0, 5)}
-                      </p>
-                      <h4 className="mt-0.5 text-sm font-semibold text-ink">
-                        {item.place?.google_maps_uri ? (
-                          <a
-                            href={item.place.google_maps_uri}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="hover:underline"
-                          >
-                            {item.title}
-                          </a>
-                        ) : (
-                          item.title
-                        )}
-                      </h4>
-                      {item.description && (
-                        <p className="mt-1 text-sm leading-6 text-gray-600">
-                          {item.description}
-                        </p>
-                      )}
-                      {item.warnings.map((warning) => (
-                        <p key={warning.code} className="mt-1 text-xs text-amber-700">
-                          {warning.message}
-                        </p>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </article>
-            ))}
-          </div>
+          <TripGuide itinerary={itinerary} />
         ) : (
           <div className="panel flex min-h-[calc(100%_-_4.5rem)] items-center justify-center border-dashed p-8 text-center">
             <div className="max-w-sm">

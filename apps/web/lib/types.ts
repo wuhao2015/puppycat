@@ -43,6 +43,16 @@ export type Place = {
   google_maps_uri: string | null;
   website_uri: string | null;
   business_status: string | null;
+  types: string[];
+  primary_type: string | null;
+  country_code: string | null;
+  opening_hours: {
+    periods: {
+      opens_at: { day: number; hour: number; minute: number };
+      closes_at: { day: number; hour: number; minute: number } | null;
+    }[];
+    weekday_descriptions: string[];
+  } | null;
 };
 
 export type ItineraryWarning = {
@@ -75,9 +85,13 @@ export type ItineraryDay = {
 
 export type DailyWeather = {
   date: string;
+  weather_code: number | null;
   summary: string;
   temperature_max_c: number | null;
   temperature_min_c: number | null;
+  precipitation_probability_max: number | null;
+  precipitation_sum_mm: number | null;
+  wind_speed_max_kmh: number | null;
 };
 
 export type Itinerary = {
