@@ -146,7 +146,8 @@ async def test_complete_json_calls_only_active_model_with_expected_input(
     assert [call["model"] for call in models.complete_calls] == [PRIMARY_MODEL]
     call = models.complete_calls[0]
     assert call["config"].response_mime_type == "application/json"
-    assert call["config"].response_schema is _JsonResult
+    assert call["config"].response_schema is None
+    assert call["config"].response_json_schema == _JsonResult.model_json_schema()
     assert call["config"].system_instruction == "You are Puppycat."
     assert [content.role for content in call["contents"]] == [
         "user",

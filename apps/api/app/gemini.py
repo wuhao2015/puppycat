@@ -165,7 +165,7 @@ class GeminiClient:
             config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 response_mime_type="application/json",
-                response_schema=response_schema,
+                response_json_schema=response_schema.model_json_schema(),
             )
             try:
                 response = await sdk.aio.models.generate_content(

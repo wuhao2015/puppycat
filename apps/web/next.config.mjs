@@ -3,6 +3,7 @@ const nextConfig = {
   output: "standalone",
   experimental: {
     useTypeScriptCli: false,
+    proxyTimeout: 120_000,
   },
   async rewrites() {
     const apiBaseUrl =

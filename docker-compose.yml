@@ -30,6 +30,9 @@ services:
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       NEXT_PUBLIC_MAPBOX_TOKEN: ${NEXT_PUBLIC_MAPBOX_TOKEN:-}
       CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      HTTP_PROXY: ${API_HTTP_PROXY:-}
+      HTTPS_PROXY: ${API_HTTPS_PROXY:-}
+      NO_PROXY: ${API_NO_PROXY:-localhost,127.0.0.1,db,api,web}
     ports:
       - "8001:8000"
     depends_on:
