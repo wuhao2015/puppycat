@@ -19,6 +19,7 @@ import {
 import { useTrips } from "../lib/trips";
 import type { ChatMessage, Trip } from "../lib/types";
 import TripGuide from "./TripGuide";
+import VisaChecklistPanel from "./VisaChecklistPanel";
 
 type TripWorkspaceProps = {
   tripId?: string;
@@ -493,6 +494,8 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
             </div>
           </div>
         )}
+
+        {trip && <VisaChecklistPanel trip={trip} />}
       </section>
     </div>
   );

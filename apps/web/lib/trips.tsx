@@ -17,6 +17,7 @@ import type {
   PlanGeneration,
   Trip,
   TripListItem,
+  VisaChecklistResponse,
 } from "./types";
 
 type ChatStreamEvent =
@@ -33,6 +34,7 @@ type TripsContextValue = {
   renameTrip: (tripId: string, title: string) => Promise<Trip>;
   deleteTrip: (tripId: string) => Promise<void>;
   planTrip: (tripId: string) => Promise<PlanGeneration>;
+  getVisa: (tripId: string) => Promise<VisaChecklistResponse>;
   streamMessage: (
     tripId: string,
     content: string,
@@ -158,6 +160,12 @@ export function TripsProvider({ children }: { children: ReactNode }) {
     [request],
   );
 
+  const getVisa = useCallback(
+    (tripId: string) =>
+      request<VisaChecklistResponse>(`/api/trips/${tripId}/visa`),
+    [request],
+  );
+
   const streamMessage = useCallback(
     async (
       tripId: string,
@@ -250,6 +258,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
       renameTrip,
       deleteTrip,
       planTrip,
+      getVisa,
       streamMessage,
     }),
     [
@@ -257,6 +266,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
       deleteTrip,
       error,
       getTrip,
+      getVisa,
       loading,
       planTrip,
       renameTrip,

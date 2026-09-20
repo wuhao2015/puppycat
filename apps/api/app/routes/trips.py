@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.auth import get_current_user, get_owned_trip
 from app.clients import AppClients
 from app.db import get_session
-from app.errors import GeminiError
+from app.errors import GeminiError, PassportCountriesRequiredError
 from app.models import Trip, User
 from app.plan_jobs import (
     enqueue_plan_generation,
@@ -23,7 +23,9 @@ from app.schemas import (
     TripResponse,
     TripListItemResponse,
     TripUpdate,
+    VisaChecklistResponse,
 )
+from app.visa import build_visa_checklist
 from app.trips import (
     append_assistant_message,
     append_user_message,
@@ -185,6 +187,28 @@ async def plan(
     generation = await enqueue_plan_generation(session, trip=trip)
     request.app.state.plan_generations.notify()
     return PlanGenerationResponse.model_validate(generation)
+
+
+@router.get("/{trip_id}/visa", response_model=VisaChecklistResponse)
+async def visa(
+    trip_id: str,
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> VisaChecklistResponse:
+    trip = await get_owned_trip(
+        session,
+        trip_id=trip_id,
+        current_user=current_user,
+    )
+    if not current_user.passport_countries:
+        raise PassportCountriesRequiredError()
+    clients: AppClients = request.app.state.clients
+    return await build_visa_checklist(
+        trip,
+        passport_countries=current_user.passport_countries,
+        clients=clients,
+    )
 
 
 def _trip_response(

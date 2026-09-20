@@ -154,3 +154,52 @@ export type ChatStreamResult = {
   message: ChatMessage;
   trip_updated_at: string;
 };
+
+export type VisaMaterial = {
+  name: string;
+  category: "required" | "optional" | "conditional";
+  details: string | null;
+  source_url: string;
+};
+
+export type VisaStep = {
+  order: number;
+  title: string;
+  description: string;
+  source_url: string;
+};
+
+export type VisaOfficialLink = {
+  label: string;
+  url: string;
+};
+
+export type VisaSource = {
+  title: string;
+  url: string;
+  published_date: string | null;
+};
+
+export type VisaChecklist = {
+  passport_country: string;
+  destination_country: string;
+  visa_required: boolean | null;
+  visa_type: string | null;
+  allowed_stay: string | null;
+  processing_time: string | null;
+  fees: string | null;
+  notes: string | null;
+  materials: VisaMaterial[];
+  steps: VisaStep[];
+  official_links: VisaOfficialLink[];
+  sources: VisaSource[];
+  status: "available" | "unavailable";
+  disclaimer: string;
+};
+
+export type VisaChecklistResponse = {
+  destination_country: string;
+  destination_country_code: string;
+  stay_days: number;
+  checklists: VisaChecklist[];
+};

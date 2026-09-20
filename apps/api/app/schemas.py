@@ -289,6 +289,67 @@ class TripResponse(TripListItemResponse):
     plan_generation: PlanGenerationResponse | None = None
 
 
+class VisaMaterial(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    category: Literal["required", "optional", "conditional"]
+    details: str | None = None
+    source_url: str
+
+
+class VisaStep(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order: int = Field(ge=1)
+    title: str
+    description: str
+    source_url: str
+
+
+class VisaOfficialLink(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str
+    url: str
+
+
+class VisaSource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    url: str
+    published_date: str | None = None
+
+
+class VisaChecklist(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    passport_country: str
+    destination_country: str
+    visa_required: bool | None = None
+    visa_type: str | None = None
+    allowed_stay: str | None = None
+    processing_time: str | None = None
+    fees: str | None = None
+    notes: str | None = None
+    materials: list[VisaMaterial] = Field(default_factory=list)
+    steps: list[VisaStep] = Field(default_factory=list)
+    official_links: list[VisaOfficialLink] = Field(default_factory=list)
+    sources: list[VisaSource] = Field(default_factory=list)
+    status: Literal["available", "unavailable"] = "unavailable"
+    disclaimer: str
+
+
+class VisaChecklistResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    destination_country: str
+    destination_country_code: str
+    stay_days: int = Field(ge=1)
+    checklists: list[VisaChecklist]
+
+
 class ChatRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

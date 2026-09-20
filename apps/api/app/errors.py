@@ -89,3 +89,16 @@ class ItineraryGenerationError(PlanningError):
     status_code = 502
     error_code = "itinerary_generation_failed"
     public_message = "Puppycat could not create a valid itinerary"
+
+
+class PassportCountriesRequiredError(PlanningError):
+    error_code = "passport_countries_required"
+    public_message = (
+        "Add a passport country in Settings to view visa requirements"
+    )
+
+
+class VisaCountryResolutionError(PlanningError):
+    status_code = 502
+    error_code = "visa_country_unavailable"
+    public_message = "Puppycat could not determine the destination country"
