@@ -255,6 +255,21 @@ class ItineraryResponse(BaseModel):
     created_at: datetime
 
 
+class PlanGenerationResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    trip_id: str
+    itinerary_id: str | None
+    input_message_ts: datetime
+    status: Literal["queued", "running", "succeeded", "failed"]
+    error_code: str | None
+    error_message: str | None
+    created_at: datetime
+    started_at: datetime | None
+    completed_at: datetime | None
+
+
 class TripListItemResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -271,6 +286,7 @@ class TripResponse(TripListItemResponse):
     preferences: dict[str, Any]
     chat_messages: list[ChatMessage]
     latest_itinerary: ItineraryResponse | None = None
+    plan_generation: PlanGenerationResponse | None = None
 
 
 class ChatRequest(BaseModel):

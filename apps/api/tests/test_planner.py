@@ -25,6 +25,7 @@ from app.gemini import GeminiMessage
 from app.main import app
 from app.models import Itinerary as ItineraryRecord
 from app.models import Trip
+from app.plan_jobs import PlanGenerationRunner
 from app.schemas import Day, Item, Itinerary, TripRequest
 
 
@@ -185,17 +186,29 @@ def _install_clients(
     gemini: _FakeGemini,
     places: _FakePlaces,
 ) -> None:
+    clients = SimpleNamespace(
+        gemini=gemini,
+        places=places,
+        weather=_FakeWeather(),
+        search=_FakeSearch(),
+    )
     monkeypatch.setattr(
         app.state,
         "clients",
-        SimpleNamespace(
-            gemini=gemini,
-            places=places,
-            weather=_FakeWeather(),
-            search=_FakeSearch(),
-        ),
+        clients,
         raising=False,
     )
+    monkeypatch.setattr(
+        app.state,
+        "plan_generations",
+        PlanGenerationRunner(clients),
+        raising=False,
+    )
+
+
+async def _run_queued_generation() -> None:
+    runner: PlanGenerationRunner = app.state.plan_generations
+    assert await runner.run_once()
 
 
 async def _itinerary_count(trip_id: str) -> int:
@@ -226,22 +239,38 @@ async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
 
     forbidden = await client.post(f"/api/trips/{trip_id}/plan", headers=other)
     response = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    duplicate = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
 
     assert forbidden.status_code == 404
-    assert response.status_code == 200
-    assert places.concurrent_search_observed
-    assert response.json()["data"]["days"][0]["items"][0]["place"]["place_id"] == (
-        "garden"
+    assert response.status_code == 202
+    assert duplicate.status_code == 202
+    assert duplicate.json()["id"] == response.json()["id"]
+    await _append_user_message(
+        trip_id,
+        "Add this only in the next plan update.",
     )
+    await _run_queued_generation()
+    assert places.concurrent_search_observed
     assert await _itinerary_count(trip_id) == 1
     detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+    assert detail["plan_generation"]["status"] == "succeeded"
+    assert detail["plan_generation"]["id"] == response.json()["id"]
+    assert detail["latest_itinerary"]["data"]["days"][0]["items"][0][
+        "place"
+    ]["place_id"] == "garden"
     assert detail["destination"] == "Tokyo"
     assert detail["preferences"] == {
         "interests": ["gardens"],
         "pace": "relaxed",
     }
     assert "destination" not in detail["preferences"]
-    assert detail["latest_itinerary"]["id"] == response.json()["id"]
+    assert detail["latest_itinerary"]["id"] == detail["plan_generation"][
+        "itinerary_id"
+    ]
+    extraction_payload = json.loads(gemini.calls[0][0][1].content)
+    assert "Add this only in the next plan update." not in {
+        message["content"] for message in extraction_payload["conversation"]
+    }
 
 
 async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(
@@ -258,16 +287,22 @@ async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(
 
     _install_clients(monkeypatch, _FakeGemini([_request(destination=None)]), places)
     missing = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
-    assert missing.status_code == 422
-    assert missing.json()["detail"]["missing_fields"] == ["destination"]
+    assert missing.status_code == 202
+    await _run_queued_generation()
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+    assert detail["plan_generation"]["status"] == "failed"
+    assert detail["plan_generation"]["error_code"] == "missing_trip_fields"
 
     invalid_request = _request().model_copy(
         update={"start_date": datetime(2026, 9, 21).date(), "end_date": datetime(2026, 9, 20).date()}
     )
     _install_clients(monkeypatch, _FakeGemini([invalid_request]), places)
     invalid = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
-    assert invalid.status_code == 422
-    assert invalid.json()["detail"]["code"] == "invalid_trip_dates"
+    assert invalid.status_code == 202
+    assert invalid.json()["id"] == missing.json()["id"]
+    await _run_queued_generation()
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+    assert detail["plan_generation"]["error_code"] == "invalid_trip_dates"
 
     _install_clients(
         monkeypatch,
@@ -275,8 +310,10 @@ async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(
         places,
     )
     unknown = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
-    assert unknown.status_code == 502
-    assert unknown.json()["detail"]["code"] == "itinerary_generation_failed"
+    assert unknown.status_code == 202
+    await _run_queued_generation()
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+    assert detail["plan_generation"]["error_code"] == "itinerary_generation_failed"
     assert await _itinerary_count(trip_id) == 0
 
 
@@ -301,10 +338,13 @@ async def test_blocker_is_replaced_once_and_only_replacement_is_reverified(
     _install_clients(monkeypatch, gemini, places)
 
     response = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    await _run_queued_generation()
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
 
-    assert response.status_code == 200
+    assert response.status_code == 202
+    assert detail["plan_generation"]["status"] == "succeeded"
     assert places.detail_calls == ["closed-museum", "garden"]
-    item = response.json()["data"]["days"][0]["items"][0]
+    item = detail["latest_itinerary"]["data"]["days"][0]["items"][0]
     assert item["place_id"] == "garden"
     assert all(warning["level"] != "blocker" for warning in item["warnings"])
 
@@ -327,17 +367,24 @@ async def test_update_adds_a_version_reuses_places_and_failure_keeps_latest(
     first_gemini = _FakeGemini([_request(), _itinerary("garden")])
     _install_clients(monkeypatch, first_gemini, places)
     first = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
-    assert first.status_code == 200
-
-    await asyncio.sleep(0.01)
+    assert first.status_code == 202
     await _append_user_message(trip_id, "Please add the market.")
+    await _run_queued_generation()
+    first_detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+    first_itinerary_id = first_detail["latest_itinerary"]["id"]
+
     places.detail_calls.clear()
     update_gemini = _FakeGemini([_request(), _itinerary("garden", "market")])
     _install_clients(monkeypatch, update_gemini, places)
     updated = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    await _run_queued_generation()
+    updated_detail = (
+        await client.get(f"/api/trips/{trip_id}", headers=owner)
+    ).json()
 
-    assert updated.status_code == 200
+    assert updated.status_code == 202
     assert updated.json()["id"] != first.json()["id"]
+    assert updated_detail["latest_itinerary"]["id"] != first_itinerary_id
     assert await _itinerary_count(trip_id) == 2
     assert places.detail_calls == ["market"]
     extraction_payload = json.loads(update_gemini.calls[0][0][1].content)
@@ -356,7 +403,11 @@ async def test_update_adds_a_version_reuses_places_and_failure_keeps_latest(
         places,
     )
     failed = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
-    assert failed.status_code == 502
+    assert failed.status_code == 202
+    await _run_queued_generation()
     assert await _itinerary_count(trip_id) == 2
     detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
-    assert detail["latest_itinerary"]["id"] == updated.json()["id"]
+    assert detail["plan_generation"]["status"] == "failed"
+    assert detail["latest_itinerary"]["id"] == updated_detail[
+        "latest_itinerary"
+    ]["id"]

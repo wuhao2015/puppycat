@@ -114,6 +114,19 @@ export type ItineraryResponse = {
   created_at: string;
 };
 
+export type PlanGeneration = {
+  id: string;
+  trip_id: string;
+  itinerary_id: string | null;
+  input_message_ts: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
 export type TripListItem = {
   id: string;
   title: string | null;
@@ -134,6 +147,7 @@ export type Trip = TripListItem & {
   };
   chat_messages: ChatMessage[];
   latest_itinerary: ItineraryResponse | null;
+  plan_generation: PlanGeneration | null;
 };
 
 export type ChatStreamResult = {

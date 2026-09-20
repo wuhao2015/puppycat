@@ -31,7 +31,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(Boolean(tripId));
   const [sending, setSending] = useState(false);
-  const [planning, setPlanning] = useState(false);
+  const [startingPlan, setStartingPlan] = useState(false);
   const [planningError, setPlanningError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -41,6 +41,10 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
     (tripId ? trips.find((item) => item.id === tripId)?.title : null) ??
     trip?.title ??
     "New trip";
+  const planGeneration = trip?.plan_generation ?? null;
+  const generationActive =
+    planGeneration?.status === "queued" || planGeneration?.status === "running";
+  const planning = startingPlan || generationActive;
 
   useEffect(() => {
     if (!tripId) {
@@ -92,6 +96,61 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
     },
     [tripId],
   );
+
+  useEffect(() => {
+    if (planGeneration?.status === "failed") {
+      setPlanningError(
+        planGeneration.error_message ?? "Unable to create itinerary",
+      );
+    } else if (planGeneration?.status === "succeeded") {
+      setPlanningError(null);
+    }
+  }, [planGeneration?.error_message, planGeneration?.status]);
+
+  useEffect(() => {
+    if (!tripId || !generationActive) {
+      return;
+    }
+
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const poll = async () => {
+      try {
+        const updatedTrip = await getTrip(tripId);
+        if (cancelled) {
+          return;
+        }
+        if (updatedTrip.plan_generation?.status === "failed") {
+          setPlanningError(
+            updatedTrip.plan_generation.error_message ??
+              "Unable to create itinerary",
+          );
+        } else if (updatedTrip.plan_generation?.status === "succeeded") {
+          setPlanningError(null);
+        }
+        setTrip(updatedTrip);
+        const stillActive =
+          updatedTrip.plan_generation?.status === "queued" ||
+          updatedTrip.plan_generation?.status === "running";
+        if (stillActive) {
+          timer = setTimeout(poll, 2_000);
+        }
+      } catch {
+        if (!cancelled) {
+          timer = setTimeout(poll, 4_000);
+        }
+      }
+    };
+
+    timer = setTimeout(poll, 2_000);
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) {
+        clearTimeout(timer);
+      }
+    };
+  }, [generationActive, getTrip, planGeneration?.id, tripId]);
 
   async function sendMessage(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
@@ -221,14 +280,15 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
     if (!trip || planning) {
       return;
     }
-    setPlanning(true);
+    setStartingPlan(true);
     setPlanningError(null);
     try {
       const activeTripId = trip.id;
-      await planTrip(activeTripId);
-      const updatedTrip = await getTrip(activeTripId);
+      const generation = await planTrip(activeTripId);
       setTrip((currentTrip) =>
-        currentTrip?.id === activeTripId ? updatedTrip : currentTrip,
+        currentTrip?.id === activeTripId
+          ? { ...currentTrip, plan_generation: generation }
+          : currentTrip,
       );
     } catch (requestError) {
       setPlanningError(
@@ -237,7 +297,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
           : "Unable to create itinerary",
       );
     } finally {
-      setPlanning(false);
+      setStartingPlan(false);
     }
   }
 
@@ -373,7 +433,9 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
             </p>
           </div>
           <span className="rounded-full border border-brand/20 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand">
-            {itinerary
+            {planning
+              ? "Creating"
+              : itinerary
               ? itinerary.verification_status === "verified"
                 ? "Verified"
                 : itinerary.verification_status === "partial"
@@ -383,8 +445,34 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
           </span>
         </div>
 
+        {planning && (
+          <div
+            className="mb-4 rounded-xl border border-brand/20 bg-brand/10 px-4 py-3 text-brand"
+            role="status"
+          >
+            <p className="text-sm font-semibold">
+              ✨ Creating your travel plan…
+            </p>
+            <p className="mt-1 text-sm">This may take a little while.</p>
+          </div>
+        )}
+
         {itinerary ? (
           <TripGuide itinerary={itinerary} />
+        ) : planning ? (
+          <div className="panel flex min-h-[calc(100%_-_9.5rem)] items-center justify-center border-dashed p-8 text-center">
+            <div className="max-w-sm">
+              <LoaderCircle
+                aria-hidden="true"
+                className="mx-auto animate-spin text-brand"
+                size={24}
+              />
+              <p className="mt-4 text-sm leading-6 text-gray-500">
+                We’ll refresh this guide automatically when it’s ready. You can
+                safely leave this page.
+              </p>
+            </div>
+          </div>
         ) : (
           <div className="panel flex min-h-[calc(100%_-_4.5rem)] items-center justify-center border-dashed p-8 text-center">
             <div className="max-w-sm">

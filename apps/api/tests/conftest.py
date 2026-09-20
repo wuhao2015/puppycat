@@ -12,7 +12,10 @@ async def clean_test_database():
         database_name = await connection.scalar(text("select current_database()"))
         assert database_name == "puppycat_test"
         await connection.execute(
-            text("truncate table itineraries, trips, users, api_cache cascade")
+            text(
+                "truncate table plan_generations, itineraries, trips, "
+                "users, api_cache cascade"
+            )
         )
     await engine.dispose()
 
@@ -22,7 +25,10 @@ async def clean_test_database():
         database_name = await connection.scalar(text("select current_database()"))
         assert database_name == "puppycat_test"
         await connection.execute(
-            text("truncate table itineraries, trips, users, api_cache cascade")
+            text(
+                "truncate table plan_generations, itineraries, trips, "
+                "users, api_cache cascade"
+            )
         )
     await engine.dispose()
 

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from app.clients import AppClients
 from app.config import settings
 from app.errors import GeminiError, PlanningError
+from app.plan_jobs import PlanGenerationRunner
 from app.routes.auth import router as auth_router
 from app.routes.trips import router as trips_router
 
@@ -15,12 +16,18 @@ from app.routes.trips import router as trips_router
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     clients = AppClients.create(settings)
+    plan_generations = PlanGenerationRunner(clients)
     app.state.clients = clients
+    app.state.plan_generations = plan_generations
     try:
         await clients.start()
+        await plan_generations.start()
         yield
     finally:
-        await clients.close()
+        try:
+            await plan_generations.close()
+        finally:
+            await clients.close()
 
 
 app = FastAPI(title="Puppycat Travel API", lifespan=lifespan)

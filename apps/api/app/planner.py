@@ -50,10 +50,21 @@ async def generate_plan(
     *,
     trip: Trip,
     clients: AppClients,
+    through: datetime | None = None,
+    previous_input_message_ts: datetime | None = None,
 ) -> ItineraryRecord:
     previous = await latest_itinerary(session, trip.id)
+    conversation = _messages_through(trip.chat_messages or [], through)
+    messages_since = (
+        previous_input_message_ts
+        if previous_input_message_ts is not None
+        else previous.created_at
+        if previous is not None
+        else None
+    )
     new_user_messages = _messages_after(
-        trip.chat_messages or [], previous.created_at if previous else None
+        conversation,
+        messages_since,
     )
     if previous is not None and not new_user_messages:
         raise NoNewTripRequirementsError()
@@ -66,6 +77,7 @@ async def generate_plan(
             trip,
             previous_data=previous_data,
             new_user_messages=new_user_messages,
+            conversation=conversation,
         ),
         TripRequest,
     )
@@ -159,9 +171,21 @@ async def generate_plan(
         data=result.itinerary.model_dump(mode="json"),
     )
     session.add(record)
-    await session.commit()
+    await session.flush()
     await session.refresh(record)
     return record
+
+
+def _messages_through(
+    payloads: list[dict[str, object]], through: datetime | None
+) -> list[dict[str, object]]:
+    if through is None:
+        return payloads
+    return [
+        payload
+        for payload in payloads
+        if ChatMessage.model_validate(payload).ts <= through
+    ]
 
 
 def _messages_after(
@@ -180,6 +204,7 @@ def _extraction_messages(
     *,
     previous_data: Itinerary | None,
     new_user_messages: list[ChatMessage],
+    conversation: list[dict[str, object]],
 ) -> list[GeminiMessage]:
     known = {
         "destination": trip.destination,
@@ -199,7 +224,7 @@ def _extraction_messages(
                 if previous_data is not None
                 else [
                     ChatMessage.model_validate(payload)
-                    for payload in (trip.chat_messages or [])
+                    for payload in conversation
                 ]
             )
         ],

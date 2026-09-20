@@ -10,10 +10,15 @@ from app.clients import AppClients
 from app.db import get_session
 from app.errors import GeminiError
 from app.models import Trip, User
-from app.planner import generate_plan, latest_itinerary
+from app.plan_jobs import (
+    enqueue_plan_generation,
+    latest_plan_generation,
+)
+from app.planner import latest_itinerary
 from app.schemas import (
     ChatRequest,
     ItineraryResponse,
+    PlanGenerationResponse,
     TripCreate,
     TripResponse,
     TripListItemResponse,
@@ -65,7 +70,12 @@ async def show(
 ) -> TripResponse:
     trip = await get_owned_trip(session, trip_id=trip_id, current_user=current_user)
     itinerary = await latest_itinerary(session, trip.id)
-    return _trip_response(trip, itinerary=itinerary)
+    generation = await latest_plan_generation(session, trip.id)
+    return _trip_response(
+        trip,
+        itinerary=itinerary,
+        generation=generation,
+    )
 
 
 @router.patch("/{trip_id}", response_model=TripResponse)
@@ -82,7 +92,12 @@ async def update(
         title=request.title,
     )
     itinerary = await latest_itinerary(session, trip.id)
-    return _trip_response(trip, itinerary=itinerary)
+    generation = await latest_plan_generation(session, trip.id)
+    return _trip_response(
+        trip,
+        itinerary=itinerary,
+        generation=generation,
+    )
 
 
 @router.delete("/{trip_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -151,31 +166,39 @@ async def chat(
     )
 
 
-@router.post("/{trip_id}/plan", response_model=ItineraryResponse)
+@router.post(
+    "/{trip_id}/plan",
+    response_model=PlanGenerationResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 async def plan(
     trip_id: str,
     request: Request,
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> ItineraryResponse:
+) -> PlanGenerationResponse:
     trip = await get_owned_trip(
         session,
         trip_id=trip_id,
         current_user=current_user,
     )
-    clients: AppClients = request.app.state.clients
-    itinerary = await generate_plan(session, trip=trip, clients=clients)
-    return ItineraryResponse.model_validate(itinerary)
+    generation = await enqueue_plan_generation(session, trip=trip)
+    request.app.state.plan_generations.notify()
+    return PlanGenerationResponse.model_validate(generation)
 
 
 def _trip_response(
     trip: Trip,
     *,
     itinerary: object | None = None,
+    generation: object | None = None,
 ) -> TripResponse:
     response = TripResponse.model_validate(trip)
-    if itinerary is None:
-        return response
-    return response.model_copy(
-        update={"latest_itinerary": ItineraryResponse.model_validate(itinerary)}
-    )
+    updates: dict[str, object] = {}
+    if itinerary is not None:
+        updates["latest_itinerary"] = ItineraryResponse.model_validate(itinerary)
+    if generation is not None:
+        updates["plan_generation"] = PlanGenerationResponse.model_validate(
+            generation
+        )
+    return response.model_copy(update=updates)

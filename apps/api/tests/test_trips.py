@@ -29,7 +29,14 @@ def assert_trip_fields(trip: Mapping[str, Any], *, includes_messages: bool) -> N
         "updated_at",
     }
     if includes_messages:
-        expected.update({"preferences", "chat_messages", "latest_itinerary"})
+        expected.update(
+            {
+                "preferences",
+                "chat_messages",
+                "latest_itinerary",
+                "plan_generation",
+            }
+        )
     assert set(trip) == expected
 
 
@@ -42,6 +49,7 @@ async def test_trip_crud_and_stable_list_order(client: AsyncClient) -> None:
     assert first["title"] == "New trip"
     assert first["preferences"] == {}
     assert first["chat_messages"] == []
+    assert first["plan_generation"] is None
     assert_trip_fields(first, includes_messages=True)
 
     second_response = await client.post(

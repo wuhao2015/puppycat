@@ -14,7 +14,7 @@ import { useAuth } from "./auth";
 import type {
   ChatMessage,
   ChatStreamResult,
-  ItineraryResponse,
+  PlanGeneration,
   Trip,
   TripListItem,
 } from "./types";
@@ -32,7 +32,7 @@ type TripsContextValue = {
   getTrip: (tripId: string) => Promise<Trip>;
   renameTrip: (tripId: string, title: string) => Promise<Trip>;
   deleteTrip: (tripId: string) => Promise<void>;
-  planTrip: (tripId: string) => Promise<ItineraryResponse>;
+  planTrip: (tripId: string) => Promise<PlanGeneration>;
   streamMessage: (
     tripId: string,
     content: string,
@@ -52,6 +52,7 @@ function asListItem(trip: Trip): TripListItem {
     preferences: _preferences,
     chat_messages: _chatMessages,
     latest_itinerary: _latestItinerary,
+    plan_generation: _planGeneration,
     ...item
   } = trip;
   return item;
@@ -151,7 +152,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
 
   const planTrip = useCallback(
     (tripId: string) =>
-      request<ItineraryResponse>(`/api/trips/${tripId}/plan`, {
+      request<PlanGeneration>(`/api/trips/${tripId}/plan`, {
         method: "POST",
       }),
     [request],
