@@ -3,13 +3,16 @@
 import {
   CalendarDays,
   CloudSun,
+  Download,
   ExternalLink as ExternalLinkIcon,
+  LoaderCircle,
   MapPin,
   TriangleAlert,
 } from "lucide-react";
 import dynamic from "next/dynamic";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
+import { useTrips } from "../lib/trips";
 import type {
   DailyWeather,
   Itinerary,
@@ -28,11 +31,37 @@ const SOURCE_LABELS: Record<string, string> = {
   tavily: "Tavily",
 };
 
-export default function TripGuide({ itinerary }: { itinerary: Itinerary }) {
+export default function TripGuide({
+  tripId,
+  itinerary,
+}: {
+  tripId: string;
+  itinerary: Itinerary;
+}) {
+  const { downloadItineraryPdf } = useTrips();
+  const [downloading, setDownloading] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
   const weatherByDate = new Map(
     itinerary.weather.map((weather) => [weather.date, weather]),
   );
   const markers = useMemo(() => itineraryMarkers(itinerary), [itinerary]);
+
+  async function downloadPdf() {
+    if (downloading) {
+      return;
+    }
+    setDownloading(true);
+    setDownloadError(null);
+    try {
+      await downloadItineraryPdf(tripId);
+    } catch (error) {
+      setDownloadError(
+        error instanceof Error ? error.message : "Unable to download itinerary PDF",
+      );
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   return (
     <div className="space-y-5">
@@ -48,11 +77,28 @@ export default function TripGuide({ itinerary }: { itinerary: Itinerary }) {
             {itinerary.destination}
           </h3>
         </div>
-        <p className="inline-flex items-center gap-1.5 text-sm text-gray-500">
-          <CalendarDays aria-hidden="true" size={14} />
-          {itinerary.start_date}–{itinerary.end_date}
-        </p>
+        <div className="flex flex-col items-start gap-3 sm:items-end">
+          <p className="inline-flex items-center gap-1.5 text-sm text-gray-500">
+            <CalendarDays aria-hidden="true" size={14} />
+            {itinerary.start_date}–{itinerary.end_date}
+          </p>
+          <button
+            type="button"
+            className="button-primary"
+            disabled={downloading}
+            onClick={downloadPdf}
+          >
+            {downloading ? (
+              <LoaderCircle aria-hidden="true" className="animate-spin" size={15} />
+            ) : (
+              <Download aria-hidden="true" size={15} />
+            )}
+            {downloading ? "Preparing PDF…" : "Download itinerary PDF"}
+          </button>
+        </div>
       </section>
+
+      {downloadError && <div className="notice-error">{downloadError}</div>}
 
       <section aria-labelledby="verification-heading" className="panel p-4">
         <h3 id="verification-heading" className="text-sm font-semibold text-ink">

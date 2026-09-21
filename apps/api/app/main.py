@@ -10,6 +10,7 @@ from app.config import settings
 from app.errors import GeminiError, PlanningError
 from app.plan_jobs import PlanGenerationRunner
 from app.routes.auth import router as auth_router
+from app.routes.documents import router as documents_router
 from app.routes.trips import router as trips_router
 
 
@@ -39,6 +40,7 @@ app.add_middleware(
 )
 app.include_router(auth_router)
 app.include_router(trips_router)
+app.include_router(documents_router)
 
 
 @app.exception_handler(GeminiError)

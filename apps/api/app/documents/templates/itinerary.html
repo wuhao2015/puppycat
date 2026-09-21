@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>{{ itinerary.destination }} itinerary</title>
+  </head>
+  <body>
+    <header class="document-header">
+      <p class="eyebrow">Travel itinerary</p>
+      <h1>{{ itinerary.destination }}</h1>
+      <p class="trip-dates">
+        {{ itinerary.start_date.strftime("%d %B %Y") }}–{{ itinerary.end_date.strftime("%d %B %Y") }}
+      </p>
+    </header>
+
+    <main>
+      {% for day in itinerary.days %}
+        {% set weather = weather_by_date.get(day.date) %}
+        <section class="day">
+          <div class="day-heading">
+            <div>
+              <p class="eyebrow">Day {{ loop.index }} · {{ day.date.strftime("%A, %d %B %Y") }}</p>
+              <h2>{{ day.title }}</h2>
+            </div>
+            {% if weather %}
+              <p class="weather">{{ weather.summary }}</p>
+            {% endif %}
+          </div>
+
+          {% if day.accommodation %}
+            <p class="accommodation"><strong>Accommodation:</strong> {{ day.accommodation }}</p>
+          {% endif %}
+
+          <div class="schedule">
+            {% for item in day.items %}
+              <article class="schedule-item">
+                <p class="time">
+                  {{ item.start_time.strftime("%H:%M") }}–{{ item.end_time.strftime("%H:%M") }}
+                </p>
+                <div class="item-content">
+                  <h3>{{ item.title }}</h3>
+                  {% if item.place and item.place.address %}
+                    <p class="address">{{ item.place.address }}</p>
+                  {% endif %}
+                  {% if item.description %}
+                    <p>{{ item.description }}</p>
+                  {% endif %}
+                  {% if item.place and (item.place.google_maps_uri or item.place.website_uri) %}
+                    <p class="links">
+                      {% if item.place.google_maps_uri %}
+                        <a href="{{ item.place.google_maps_uri }}">Google Maps</a>
+                      {% endif %}
+                      {% if item.place.website_uri %}
+                        <a href="{{ item.place.website_uri }}">Official website</a>
+                      {% endif %}
+                    </p>
+                  {% endif %}
+                  {% if item.warnings %}
+                    <ul class="warnings">
+                      {% for warning in item.warnings %}
+                        <li>{{ warning.message }}</li>
+                      {% endfor %}
+                    </ul>
+                  {% endif %}
+                </div>
+              </article>
+            {% else %}
+              <p class="empty">No scheduled activities.</p>
+            {% endfor %}
+          </div>
+        </section>
+      {% endfor %}
+
+      {% if itinerary.warnings %}
+        <section class="notices">
+          <h2>Trip notices</h2>
+          <ul class="warnings">
+            {% for warning in itinerary.warnings %}
+              <li>{{ warning.message }}</li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
+    </main>
+
+    <footer>
+      Generated from the latest saved Puppycat itinerary. Confirm reservations,
+      opening hours, entry requirements, and travel advisories before departure.
+    </footer>
+  </body>
+</html>

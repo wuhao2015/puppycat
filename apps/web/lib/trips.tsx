@@ -33,6 +33,7 @@ type TripsContextValue = {
   getTrip: (tripId: string) => Promise<Trip>;
   renameTrip: (tripId: string, title: string) => Promise<Trip>;
   deleteTrip: (tripId: string) => Promise<void>;
+  downloadItineraryPdf: (tripId: string) => Promise<void>;
   planTrip: (tripId: string) => Promise<PlanGeneration>;
   getVisa: (tripId: string) => Promise<VisaChecklistResponse>;
   streamMessage: (
@@ -160,6 +161,32 @@ export function TripsProvider({ children }: { children: ReactNode }) {
     [request],
   );
 
+  const downloadItineraryPdf = useCallback(
+    async (tripId: string) => {
+      const response = await requestResponse(
+        `/api/trips/${tripId}/documents/itinerary`,
+        { method: "POST" },
+      );
+      const blob = await response.blob();
+      if (blob.size === 0) {
+        throw new Error("Puppycat returned an empty itinerary PDF");
+      }
+
+      const disposition = response.headers.get("Content-Disposition");
+      const filename =
+        disposition?.match(/filename="([^"]+)"/)?.[1] ?? "itinerary.pdf";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+    },
+    [requestResponse],
+  );
+
   const getVisa = useCallback(
     (tripId: string) =>
       request<VisaChecklistResponse>(`/api/trips/${tripId}/visa`),
@@ -257,6 +284,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
       getTrip,
       renameTrip,
       deleteTrip,
+      downloadItineraryPdf,
       planTrip,
       getVisa,
       streamMessage,
@@ -264,6 +292,7 @@ export function TripsProvider({ children }: { children: ReactNode }) {
     [
       createTrip,
       deleteTrip,
+      downloadItineraryPdf,
       error,
       getTrip,
       getVisa,

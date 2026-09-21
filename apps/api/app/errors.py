@@ -91,6 +91,12 @@ class ItineraryGenerationError(PlanningError):
     public_message = "Puppycat could not create a valid itinerary"
 
 
+class ItineraryNotFoundError(PlanningError):
+    status_code = 404
+    error_code = "itinerary_not_found"
+    public_message = "Create an itinerary before downloading its PDF"
+
+
 class PassportCountriesRequiredError(PlanningError):
     error_code = "passport_countries_required"
     public_message = (

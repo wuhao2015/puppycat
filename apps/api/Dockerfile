@@ -10,6 +10,14 @@ COPY app ./app
 COPY alembic.ini ./
 COPY alembic ./alembic
 
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        fonts-noto-cjk \
+        libharfbuzz-subset0 \
+        libpango-1.0-0 \
+        libpangoft2-1.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir .
 
 EXPOSE 8000

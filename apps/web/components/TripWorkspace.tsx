@@ -458,8 +458,8 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
           </div>
         )}
 
-        {itinerary ? (
-          <TripGuide itinerary={itinerary} />
+        {itinerary && trip ? (
+          <TripGuide tripId={trip.id} itinerary={itinerary} />
         ) : planning ? (
           <div className="panel flex min-h-[calc(100%_-_9.5rem)] items-center justify-center border-dashed p-8 text-center">
             <div className="max-w-sm">

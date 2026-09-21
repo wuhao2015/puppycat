@@ -15,15 +15,18 @@ dependencies = [
   "fastapi>=0.116,<1",
   "google-genai>=2.19,<3",
   "httpx>=0.28,<1",
+  "jinja2>=3.1,<4",
   "PyJWT>=2.10,<3",
   "pydantic-settings>=2.15,<3",
   "sqlalchemy[asyncio]>=2.0,<3",
   "uvicorn>=0.35,<1",
+  "weasyprint>=70,<71",
 ]
 
 [project.optional-dependencies]
 test = [
   "httpx>=0.28,<1",
+  "pypdf>=6,<7",
   "pytest>=9,<10",
   "pytest-asyncio>=1.4,<2",
 ]
@@ -34,3 +37,6 @@ testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.documents" = ["templates/*.html", "templates/*.css"]
