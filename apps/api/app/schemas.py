@@ -11,7 +11,6 @@ from pydantic import (
 )
 
 from app.external.places import Place, PlaceCoordinate
-from app.external.weather import DailyWeather
 
 
 class RegisterRequest(BaseModel):
@@ -205,12 +204,30 @@ class Item(BaseModel):
         return self
 
 
+class DayWeather(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    weather_code: int | None
+    summary: str
+    temperature_max_c: float | None
+    temperature_min_c: float | None
+    precipitation_probability_max: int | None
+    precipitation_sum_mm: float | None
+    wind_speed_max_kmh: float | None
+
+
 class Day(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     date: date
+    city: str | None = Field(default=None, min_length=1)
+    country: str | None = Field(default=None, min_length=1)
+    country_code: str | None = Field(default=None, min_length=2, max_length=2)
+    location: PlaceCoordinate | None = None
     title: str = Field(min_length=1)
     accommodation: str | None = None
+    intercity_transport: str | None = None
+    weather: DayWeather | None = None
     items: list[Item] = Field(default_factory=list)
 
 
@@ -218,17 +235,25 @@ class Itinerary(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     destination: str = Field(min_length=1)
-    destination_location: PlaceCoordinate | None = None
     start_date: date
     end_date: date
     days: list[Day]
-    weather: list[DailyWeather] = Field(default_factory=list)
     warnings: list[Warning] = Field(default_factory=list)
     verification_status: Literal["verified", "partial", "unavailable"] = (
         "unavailable"
     )
     verified_sources: list[VerificationSource] = Field(default_factory=list)
     unavailable_sources: list[VerificationSource] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def discard_legacy_global_location_data(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        payload = dict(value)
+        payload.pop("destination_location", None)
+        payload.pop("weather", None)
+        return payload
 
     @model_validator(mode="after")
     def validate_date_range(self) -> Self:

@@ -16,10 +16,7 @@ _BASE_STYLESHEET = CSS(filename=str(_TEMPLATE_DIR / "base.css"))
 
 
 def render_itinerary_pdf(itinerary: Itinerary) -> bytes:
-    html = _ITINERARY_TEMPLATE.render(
-        itinerary=itinerary,
-        weather_by_date={weather.date: weather for weather in itinerary.weather},
-    )
+    html = _ITINERARY_TEMPLATE.render(itinerary=itinerary)
     return HTML(string=html, base_url=str(_TEMPLATE_DIR)).write_pdf(
         stylesheets=[_BASE_STYLESHEET]
     )

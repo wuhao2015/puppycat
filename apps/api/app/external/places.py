@@ -81,6 +81,7 @@ class Place(BaseModel):
     types: list[str] = Field(default_factory=list)
     primary_type: str | None = None
     country_code: str | None = None
+    country_name: str | None = None
     business_status: str | None = None
     google_maps_uri: str | None = None
     website_uri: str | None = None
@@ -112,6 +113,7 @@ class _GoogleCoordinate(BaseModel):
 
 class _GoogleAddressComponent(BaseModel):
     short_text: str = Field(alias="shortText")
+    long_text: str | None = Field(default=None, alias="longText")
     types: list[str] = Field(default_factory=list)
 
 
@@ -346,12 +348,8 @@ class PlacesClient:
 
 
 def _normalize_place(place: _GooglePlace) -> Place:
-    country_code = next(
-        (
-            component.short_text.upper()
-            for component in place.address_components
-            if "country" in component.types
-        ),
+    country_component = next(
+        (component for component in place.address_components if "country" in component.types),
         None,
     )
     opening_hours = None
@@ -393,7 +391,10 @@ def _normalize_place(place: _GooglePlace) -> Place:
         ),
         types=place.types,
         primary_type=place.primary_type,
-        country_code=country_code,
+        country_code=(
+            country_component.short_text.upper() if country_component is not None else None
+        ),
+        country_name=(country_component.long_text if country_component is not None else None),
         business_status=place.business_status,
         google_maps_uri=place.google_maps_uri,
         website_uri=place.website_uri,

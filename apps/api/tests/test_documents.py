@@ -23,7 +23,7 @@ async def _register(client: AsyncClient, prefix: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
-def _itinerary(activity_title: str) -> Itinerary:
+def _itinerary(*, accommodation: str, intercity_transport: str) -> Itinerary:
     travel_date = date(2027, 4, 12)
     return Itinerary(
         destination="Kyoto, Japan",
@@ -32,14 +32,17 @@ def _itinerary(activity_title: str) -> Itinerary:
         days=[
             Day(
                 date=travel_date,
+                city="Kyoto",
+                country="Japan",
                 title="Historic Kyoto",
-                accommodation="Kyoto Station Hotel",
+                accommodation=accommodation,
+                intercity_transport=intercity_transport,
                 items=[
                     Item(
-                        id=f"item-{activity_title}",
+                        id="daily-activity",
                         start_time=time(9),
                         end_time=time(11),
-                        title=activity_title,
+                        title="Activity that must not appear in the PDF",
                         description="A recognizable daily itinerary activity.",
                         kind="generic",
                     )
@@ -66,6 +69,30 @@ async def _save_itinerary(
         await session.commit()
 
 
+def test_legacy_global_location_fields_are_not_reemitted() -> None:
+    itinerary = Itinerary.model_validate(
+        {
+            "destination": "Kyoto, Japan",
+            "destination_location": {"latitude": 35.0116, "longitude": 135.7681},
+            "start_date": "2027-04-12",
+            "end_date": "2027-04-12",
+            "weather": [],
+            "days": [
+                {
+                    "date": "2027-04-12",
+                    "title": "Historic Kyoto",
+                    "accommodation": "Kyoto Station Hotel",
+                    "items": [],
+                }
+            ],
+        }
+    )
+
+    payload = itinerary.model_dump(mode="json")
+    assert "destination_location" not in payload
+    assert "weather" not in payload
+
+
 async def test_itinerary_pdf_uses_latest_saved_version(
     client: AsyncClient,
 ) -> None:
@@ -73,12 +100,18 @@ async def test_itinerary_pdf_uses_latest_saved_version(
     trip = (await client.post("/api/trips", headers=owner)).json()
     await _save_itinerary(
         trip["id"],
-        _itinerary("Old garden visit"),
+        _itinerary(
+            accommodation="Old Kyoto Hotel",
+            intercity_transport="Old train service",
+        ),
         created_at=datetime(2027, 1, 1, tzinfo=timezone.utc),
     )
     await _save_itinerary(
         trip["id"],
-        _itinerary("Latest temple visit"),
+        _itinerary(
+            accommodation="Kyoto Station Hotel",
+            intercity_transport="Tokyo → Kyoto · Shinkansen",
+        ),
         created_at=datetime(2027, 1, 2, tzinfo=timezone.utc),
     )
 
@@ -99,10 +132,14 @@ async def test_itinerary_pdf_uses_latest_saved_version(
     text = "\n".join(
         page.extract_text() or "" for page in PdfReader(BytesIO(response.content)).pages
     )
-    assert "Kyoto, Japan" in text
-    assert "12 April 2027" in text
-    assert "Latest temple visit" in text
-    assert "Old garden visit" not in text
+    assert "12 Apr 2027" in text
+    assert "Kyoto" in text
+    assert "Japan" in text
+    assert "Kyoto Station Hotel" in text
+    assert "Shinkansen" in text
+    assert "Old Kyoto Hotel" not in text
+    assert "Activity that must not appear" not in text
+    assert "TRAVEL ITINERARY" not in text
 
 
 async def test_itinerary_pdf_rejects_missing_and_other_users_trips(

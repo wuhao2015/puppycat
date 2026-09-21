@@ -8,8 +8,8 @@ from typing import Literal
 from app.clients import AppClients
 from app.external.places import Place, PlaceOpeningHours
 from app.external.search import SearchResult
-from app.external.weather import DailyWeather, WeatherResult
-from app.schemas import Item, Itinerary, Warning
+from app.external.weather import DailyWeather
+from app.schemas import DayWeather, Item, Itinerary, Warning
 
 
 _WEEK_MINUTES = 7 * 24 * 60
@@ -91,30 +91,26 @@ async def verify_itinerary(
     new_place_ids = [place_id for place_id in place_ids if place_id not in known]
 
     if reuse_global_from is None:
-        detail_results, weather = await asyncio.gather(
+        detail_results, weather_result = await asyncio.gather(
             asyncio.gather(
                 *(clients.places.details(place_id) for place_id in new_place_ids)
             ),
-            (
-                clients.weather.forecast(
-                    latitude=verified.destination_location.latitude,
-                    longitude=verified.destination_location.longitude,
-                    start_date=verified.start_date,
-                    end_date=verified.end_date,
-                )
-                if verified.destination_location is not None
-                else _weather_without_coordinates()
-            ),
+            _weather_for_overnight_cities(verified, clients=clients),
         )
-        weather_days = weather.days if weather.status == "available" else []
-        weather_available = weather.status == "available"
-        global_warnings = _weather_warnings(weather)
+        weather_by_date, weather_available, global_warnings = weather_result
     else:
         detail_results = await asyncio.gather(
             *(clients.places.details(place_id) for place_id in new_place_ids)
         )
-        weather_days = list(reuse_global_from.weather)
-        weather_available = "open_meteo" in reuse_global_from.verified_sources
+        weather_by_date = {
+            day.date: DailyWeather(date=day.date, **day.weather.model_dump())
+            for day in reuse_global_from.days
+            if day.weather is not None
+        }
+        weather_available = (
+            "open_meteo" in reuse_global_from.verified_sources
+            and len(weather_by_date) == len(verified.days)
+        )
         current_item_ids = {
             item.id for day in verified.days for item in day.items
         }
@@ -172,8 +168,13 @@ async def verify_itinerary(
             )
         )
 
-    weather_by_date = {weather_day.date: weather_day for weather_day in weather_days}
     for day in verified.days:
+        weather_day = weather_by_date.get(day.date)
+        day.weather = (
+            DayWeather.model_validate(weather_day.model_dump(exclude={"date"}))
+            if weather_day is not None
+            else None
+        )
         for item in day.items:
             item.place = places_by_id.get(item.place_id or "")
             item.warnings = []
@@ -210,13 +211,11 @@ async def verify_itinerary(
                 if not place_complete:
                     place_unavailable = True
 
-            weather_day = weather_by_date.get(day.date)
             if weather_day is not None and _is_outdoor(item):
                 weather_warning = _outdoor_weather_warning(item, weather_day)
                 if weather_warning is not None:
                     item.warnings.append(weather_warning)
 
-    verified.weather = weather_days
     source_available = {
         "google_places": not place_unavailable,
         "open_meteo": weather_available,
@@ -238,8 +237,59 @@ async def verify_itinerary(
     return VerificationResult(itinerary=verified, blocker_place_ids=blockers)
 
 
-async def _weather_without_coordinates() -> WeatherResult:
-    return WeatherResult(status="unavailable", unavailable_reason="invalid_response")
+async def _weather_for_overnight_cities(
+    itinerary: Itinerary,
+    *,
+    clients: AppClients,
+) -> tuple[dict[date, DailyWeather], bool, list[Warning]]:
+    dates_by_location: dict[tuple[float, float], list[date]] = {}
+    missing_location = False
+    for day in itinerary.days:
+        if day.location is None:
+            missing_location = True
+            continue
+        key = (round(day.location.latitude, 5), round(day.location.longitude, 5))
+        dates_by_location.setdefault(key, []).append(day.date)
+
+    requests = [
+        clients.weather.forecast(
+            latitude=latitude,
+            longitude=longitude,
+            start_date=min(dates),
+            end_date=max(dates),
+        )
+        for (latitude, longitude), dates in dates_by_location.items()
+    ]
+    results = await asyncio.gather(*requests)
+    weather_by_date: dict[date, DailyWeather] = {}
+    weather_available = not missing_location
+    for dates, result in zip(dates_by_location.values(), results, strict=True):
+        if result.status != "available":
+            weather_available = False
+            continue
+        forecast_by_date = {weather.date: weather for weather in result.days}
+        for day_date in dates:
+            weather = forecast_by_date.get(day_date)
+            if weather is None:
+                weather_available = False
+                continue
+            weather_by_date[day_date] = weather
+
+    if len(weather_by_date) != len(itinerary.days):
+        weather_available = False
+    warnings = (
+        []
+        if weather_available
+        else [
+            Warning(
+                level="caution",
+                code="weather_not_available",
+                message="Forecast data is unavailable for one or more overnight cities.",
+                source="open_meteo",
+            )
+        ]
+    )
+    return weather_by_date, weather_available, warnings
 
 
 async def _search_checks(
@@ -329,23 +379,6 @@ def _search_warnings(checks: list[_SearchCheck]) -> list[Warning]:
                     )
                 )
     return warnings
-
-
-def _weather_warnings(weather: WeatherResult) -> list[Warning]:
-    if weather.status == "available":
-        return []
-    return [
-        Warning(
-            level="caution",
-            code="weather_not_available",
-            message=(
-                "Weather is not available for these dates yet."
-                if weather.status == "not_available_for_date"
-                else "Weather could not be verified."
-            ),
-            source="open_meteo",
-        )
-    ]
 
 
 def _place_warnings(

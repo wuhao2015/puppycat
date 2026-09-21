@@ -46,6 +46,7 @@ export type Place = {
   types: string[];
   primary_type: string | null;
   country_code: string | null;
+  country_name: string | null;
   opening_hours: {
     periods: {
       opens_at: { day: number; hour: number; minute: number };
@@ -78,13 +79,18 @@ export type ItineraryItem = {
 
 export type ItineraryDay = {
   date: string;
+  city: string | null;
+  country: string | null;
+  country_code: string | null;
+  location: PlaceCoordinate | null;
   title: string;
   accommodation: string | null;
+  intercity_transport: string | null;
+  weather: DayWeather | null;
   items: ItineraryItem[];
 };
 
-export type DailyWeather = {
-  date: string;
+export type DayWeather = {
   weather_code: number | null;
   summary: string;
   temperature_max_c: number | null;
@@ -96,11 +102,9 @@ export type DailyWeather = {
 
 export type Itinerary = {
   destination: string;
-  destination_location: PlaceCoordinate | null;
   start_date: string;
   end_date: string;
   days: ItineraryDay[];
-  weather: DailyWeather[];
   warnings: ItineraryWarning[];
   verification_status: "verified" | "partial" | "unavailable";
   verified_sources: string[];

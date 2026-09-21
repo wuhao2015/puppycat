@@ -132,6 +132,8 @@ def _destination() -> Place:
         place_id="tokyo",
         name="Tokyo",
         location=PlaceCoordinate(latitude=35.6762, longitude=139.6503),
+        country_code="JP",
+        country_name="Japan",
         business_status="OPERATIONAL",
     )
 
@@ -164,6 +166,8 @@ def _itinerary(*place_ids: str) -> Itinerary:
         days=[
             Day(
                 date="2026-09-20",
+                city="Tokyo",
+                country="Japan",
                 title="Tokyo highlights",
                 items=[
                     Item(
@@ -258,6 +262,12 @@ async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
     assert detail["latest_itinerary"]["data"]["days"][0]["items"][0][
         "place"
     ]["place_id"] == "garden"
+    day = detail["latest_itinerary"]["data"]["days"][0]
+    assert day["city"] == "Tokyo"
+    assert day["country"] == "Japan"
+    assert day["country_code"] == "JP"
+    assert day["location"] == {"latitude": 35.6762, "longitude": 139.6503}
+    assert day["weather"] is None
     assert detail["destination"] == "Tokyo"
     assert detail["preferences"] == {
         "interests": ["gardens"],

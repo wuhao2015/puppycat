@@ -14,7 +14,7 @@ import { useMemo, useState } from "react";
 
 import { useTrips } from "../lib/trips";
 import type {
-  DailyWeather,
+  DayWeather,
   Itinerary,
   ItineraryWarning,
 } from "../lib/types";
@@ -41,9 +41,6 @@ export default function TripGuide({
   const { downloadItineraryPdf } = useTrips();
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
-  const weatherByDate = new Map(
-    itinerary.weather.map((weather) => [weather.date, weather]),
-  );
   const markers = useMemo(() => itineraryMarkers(itinerary), [itinerary]);
 
   async function downloadPdf() {
@@ -147,29 +144,11 @@ export default function TripGuide({
         )}
       </section>
 
-      <section aria-labelledby="weather-heading">
-        <h3 id="weather-heading" className="mb-2 text-sm font-semibold text-ink">
-          Weather
-        </h3>
-        {itinerary.weather.length > 0 ? (
-          <div className="grid gap-2 sm:grid-cols-2">
-            {itinerary.weather.map((weather) => (
-              <WeatherCard key={weather.date} weather={weather} />
-            ))}
-          </div>
-        ) : (
-          <p className="panel p-3 text-sm text-gray-500">
-            Forecast data is unavailable for these travel dates.
-          </p>
-        )}
-      </section>
-
       <section aria-labelledby="days-heading" className="space-y-4">
         <h3 id="days-heading" className="text-sm font-semibold text-ink">
           Daily itinerary
         </h3>
         {itinerary.days.map((day, dayIndex) => {
-          const weather = weatherByDate.get(day.date);
           return (
             <article key={day.date} className="panel p-4">
               <div className="flex items-start justify-between gap-3">
@@ -180,17 +159,35 @@ export default function TripGuide({
                   <h4 className="mt-1 text-base font-semibold text-ink">
                     {day.title}
                   </h4>
+                  {(day.city || day.country) && (
+                    <p className="mt-1 text-sm text-gray-500">
+                      {[day.city, day.country].filter(Boolean).join(", ")}
+                    </p>
+                  )}
                 </div>
-                {weather && (
+                {day.weather && (
                   <span className="inline-flex items-center gap-1 text-xs text-gray-500">
                     <CloudSun aria-hidden="true" size={14} />
-                    {weather.summary}
+                    {day.weather.summary}
                   </span>
                 )}
               </div>
               {day.accommodation && (
                 <p className="mt-2 text-xs text-gray-500">
                   Accommodation: {day.accommodation}
+                </p>
+              )}
+              {day.intercity_transport && (
+                <p className="mt-1 text-xs text-gray-500">
+                  Intercity transport: {day.intercity_transport}
+                </p>
+              )}
+              {day.weather && (
+                <p className="mt-2 text-xs text-gray-500">
+                  {temperatureRange(day.weather)}
+                  {day.weather.precipitation_probability_max !== null
+                    ? ` · Rain ${day.weather.precipitation_probability_max}%`
+                    : ""}
                 </p>
               )}
               <div className="mt-4 space-y-5 border-l border-brand/20 pl-4">
@@ -314,25 +311,7 @@ function WarningNotice({ warning }: { warning: ItineraryWarning }) {
   );
 }
 
-function WeatherCard({ weather }: { weather: DailyWeather }) {
-  return (
-    <div className="panel p-3">
-      <p className="text-xs font-medium text-brand">{weather.date}</p>
-      <p className="mt-1 text-sm font-semibold text-ink">{weather.summary}</p>
-      <p className="mt-1 text-xs text-gray-500">
-        {temperatureRange(weather)}
-        {weather.precipitation_probability_max !== null
-          ? ` · Rain ${weather.precipitation_probability_max}%`
-          : ""}
-        {weather.wind_speed_max_kmh !== null
-          ? ` · Wind ${weather.wind_speed_max_kmh} km/h`
-          : ""}
-      </p>
-    </div>
-  );
-}
-
-function temperatureRange(weather: DailyWeather): string {
+function temperatureRange(weather: DayWeather): string {
   if (weather.temperature_min_c === null || weather.temperature_max_c === null) {
     return "Temperature unavailable";
   }
@@ -356,6 +335,14 @@ function OutboundLink({ href, label }: { href: string; label: string }) {
 function itineraryMarkers(itinerary: Itinerary): MapMarker[] {
   const markers = new Map<string, MapMarker>();
   for (const day of itinerary.days) {
+    if (day.location && day.city) {
+      markers.set(`overnight-${day.date}`, {
+        id: `overnight-${day.date}`,
+        label: [day.city, day.country].filter(Boolean).join(", "),
+        latitude: day.location.latitude,
+        longitude: day.location.longitude,
+      });
+    }
     for (const item of day.items) {
       const location = item.place?.location;
       if (!location || !item.place) {
@@ -368,14 +355,6 @@ function itineraryMarkers(itinerary: Itinerary): MapMarker[] {
         longitude: location.longitude,
       });
     }
-  }
-  if (markers.size === 0 && itinerary.destination_location) {
-    markers.set("destination", {
-      id: "destination",
-      label: itinerary.destination,
-      latitude: itinerary.destination_location.latitude,
-      longitude: itinerary.destination_location.longitude,
-    });
   }
   return [...markers.values()];
 }

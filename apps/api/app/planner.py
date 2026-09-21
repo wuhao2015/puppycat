@@ -30,8 +30,11 @@ DRAFT_PROMPT = """Create a practical daily itinerary matching the supplied reque
 Every place item must use a place_id from candidate_places. Activities without a
 specific candidate must be kind=generic and have place_id=null. Cover every date
 exactly once in chronological order, use unique item IDs, and keep item times
-within one day. Do not invent verification results, warnings, place details,
-weather, destination coordinates, or source status; those are added by the server."""
+within one day. Every day must include the city and country where the traveller
+will stay overnight. Set intercity_transport only when travelling between
+overnight cities; otherwise return null. Do not invent verification results,
+warnings, place details, coordinates, weather, or source status; those are added
+by the server."""
 
 
 async def latest_itinerary(
@@ -113,11 +116,11 @@ async def generate_plan(
         ),
         Itinerary,
     )
-    draft = _prepare_draft(
+    draft = await _prepare_draft(
         draft,
         request=extracted,
         candidate_ids={place.place_id for place in candidates},
-        destination_result=destination_result,
+        clients=clients,
     )
     existing_places = known_places(previous_data) if previous_data is not None else {}
     result = await verify_itinerary(
@@ -139,12 +142,12 @@ async def generate_plan(
             ),
             Itinerary,
         )
-        replacement = _prepare_draft(
+        replacement = await _prepare_draft(
             replacement,
             request=extracted,
             candidate_ids={place.place_id for place in candidates}
             - result.blocker_place_ids,
-            destination_result=destination_result,
+            clients=clients,
         )
         reusable = known_places(result.itinerary)
         for place_id in result.blocker_place_ids:
@@ -317,12 +320,12 @@ def _merge_places(first: list[Place], second: list[Place]) -> list[Place]:
     return list(by_id.values())
 
 
-def _prepare_draft(
+async def _prepare_draft(
     draft: Itinerary,
     *,
     request: TripRequest,
     candidate_ids: set[str],
-    destination_result: PlacesSearchResult,
+    clients: AppClients,
 ) -> Itinerary:
     if (
         request.destination is None
@@ -333,21 +336,38 @@ def _prepare_draft(
     ):
         raise ItineraryGenerationError()
     for day in draft.days:
+        if not day.city or not day.country:
+            raise ItineraryGenerationError()
         for item in day.items:
             if item.kind == "place" and item.place_id not in candidate_ids:
                 raise ItineraryGenerationError()
             item.place = None
             item.warnings = []
-    draft.destination = request.destination
-    draft.destination_location = next(
-        (
-            place.location
-            for place in destination_result.places
-            if place.location is not None
-        ),
-        None,
+        day.weather = None
+
+    location_queries = list(
+        dict.fromkeys((day.city.strip(), day.country.strip()) for day in draft.days)
     )
-    draft.weather = []
+    locations = await asyncio.gather(
+        *(
+            clients.places.search_text(f"{city}, {country}", max_results=1)
+            for city, country in location_queries
+        )
+    )
+    location_by_query = dict(zip(location_queries, locations, strict=True))
+    for day in draft.days:
+        result = location_by_query[(day.city.strip(), day.country.strip())]
+        location = result.places[0] if result.status == "available" and result.places else None
+        if location is None:
+            day.location = None
+            day.country_code = None
+            continue
+        day.city = location.name
+        day.country = location.country_name or day.country
+        day.country_code = location.country_code
+        day.location = location.location
+
+    draft.destination = request.destination
     draft.warnings = []
     draft.verification_status = "unavailable"
     draft.verified_sources = []

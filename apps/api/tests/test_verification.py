@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, time, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -39,9 +39,25 @@ class _Places:
 class _Weather:
     def __init__(self, result: WeatherResult) -> None:
         self.result = result
+        self.calls: list[dict[str, object]] = []
 
-    async def forecast(self, **_kwargs: object) -> WeatherResult:
-        return self.result
+    async def forecast(self, **kwargs: object) -> WeatherResult:
+        self.calls.append(kwargs)
+        if self.result.status != "available" or not self.result.days:
+            return self.result
+        start_date = kwargs["start_date"]
+        end_date = kwargs["end_date"]
+        assert isinstance(start_date, date)
+        assert isinstance(end_date, date)
+        template = self.result.days[0]
+        return self.result.model_copy(
+            update={
+                "days": [
+                    template.model_copy(update={"date": start_date + timedelta(days=index)})
+                    for index in range((end_date - start_date).days + 1)
+                ]
+            }
+        )
 
 
 class _Search:
@@ -134,6 +150,13 @@ def _itinerary(
         days=[
             Day(
                 date=date(2026, 9, 21),
+                city="Tokyo",
+                country="Japan",
+                location=(
+                    PlaceCoordinate(latitude=35.6762, longitude=139.6503)
+                    if with_coordinates
+                    else None
+                ),
                 title="Tokyo",
                 items=items,
             )
@@ -246,7 +269,8 @@ async def test_adverse_weather_warns_for_outdoor_activity() -> None:
 
     item = result.itinerary.days[0].items[0]
     assert {warning.code for warning in item.warnings} == {"outdoor_weather_risk"}
-    assert result.itinerary.weather == [_weather_day(severe=True)]
+    assert result.itinerary.days[0].weather is not None
+    assert result.itinerary.days[0].weather.summary == "Heavy rain"
     assert result.itinerary.verification_status == "verified"
 
 
@@ -312,8 +336,51 @@ async def test_verification_status_matches_source_results(
     assert set(result.itinerary.verified_sources) == verified
     assert set(result.itinerary.unavailable_sources) == unavailable
     if "open_meteo" in unavailable:
-        assert result.itinerary.weather == []
+        assert result.itinerary.days[0].weather is None
         assert any(
             warning.code == "weather_not_available"
             for warning in result.itinerary.warnings
         )
+
+
+async def test_weather_is_saved_on_each_overnight_city() -> None:
+    tokyo = PlaceCoordinate(latitude=35.6762, longitude=139.6503)
+    kyoto = PlaceCoordinate(latitude=35.0116, longitude=135.7681)
+    itinerary = Itinerary(
+        destination="Tokyo and Kyoto",
+        start_date=date(2026, 9, 21),
+        end_date=date(2026, 9, 22),
+        days=[
+            Day(
+                date=date(2026, 9, 21),
+                city="Tokyo",
+                country="Japan",
+                location=tokyo,
+                title="Tokyo",
+            ),
+            Day(
+                date=date(2026, 9, 22),
+                city="Kyoto",
+                country="Japan",
+                location=kyoto,
+                title="Kyoto",
+                intercity_transport="Tokyo to Kyoto by train",
+            ),
+        ],
+    )
+    clients = _clients(
+        [],
+        weather=WeatherResult(status="available", days=[_weather_day()]),
+    )
+
+    result = await verify_itinerary(
+        itinerary,
+        clients=clients,
+        places_available=True,
+    )
+
+    assert [day.weather.summary if day.weather else None for day in result.itinerary.days] == [
+        "Mainly clear",
+        "Mainly clear",
+    ]
+    assert len(clients.weather.calls) == 2

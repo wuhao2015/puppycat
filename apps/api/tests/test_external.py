@@ -36,7 +36,11 @@ async def test_places_search_and_details_are_normalized_and_cached() -> None:
                             "types": ["park", "tourist_attraction"],
                             "primaryType": "park",
                             "addressComponents": [
-                                {"shortText": "JP", "types": ["country"]}
+                                {
+                                    "shortText": "JP",
+                                    "longText": "Japan",
+                                    "types": ["country"],
+                                }
                             ],
                             "businessStatus": "OPERATIONAL",
                             "googleMapsUri": "https://maps.google.test/garden",
@@ -54,7 +58,11 @@ async def test_places_search_and_details_are_normalized_and_cached() -> None:
                 "formattedAddress": "Kyoto, Japan",
                 "location": {"latitude": 35.0116, "longitude": 135.7681},
                 "addressComponents": [
-                    {"shortText": "JP", "types": ["country"]}
+                    {
+                        "shortText": "JP",
+                        "longText": "Japan",
+                        "types": ["country"],
+                    }
                 ],
                 "websiteUri": "https://garden.example",
                 "regularOpeningHours": {
@@ -89,6 +97,7 @@ async def test_places_search_and_details_are_normalized_and_cached() -> None:
     assert first_search == cached_search
     assert first_search.status == "available"
     assert first_search.places[0].country_code == "JP"
+    assert first_search.places[0].country_name == "Japan"
     assert first_search.places[0].location is not None
     assert first_search.places[0].location.latitude == 35.0116
 
