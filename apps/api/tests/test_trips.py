@@ -147,3 +147,20 @@ async def test_trips_are_private_to_their_owner(client: AsyncClient) -> None:
 async def test_trip_endpoints_require_authentication(client: AsyncClient) -> None:
     assert (await client.get("/api/trips")).status_code == 401
     assert (await client.post("/api/trips")).status_code == 401
+
+
+async def test_auth_responses_are_not_cached(client: AsyncClient) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={
+            "email": f"cache-{uuid4()}@example.com",
+            "password": "correct-horse-battery-staple",
+            "signup_code": "test-signup-code",
+        },
+    )
+    assert response.status_code == 201
+    assert response.headers["cache-control"] == "no-store"
+
+    unauthorized = await client.get("/api/auth/me")
+    assert unauthorized.status_code == 401
+    assert unauthorized.headers["cache-control"] == "no-store"

@@ -1,64 +1,117 @@
 # Puppycat Travel
 
-Puppycat Travel is being rebuilt as a small travel-planning application. The current application includes the Puppycat visual shell, account authentication, Trip management, and persisted Trip-scoped Gemini chat with streamed replies.
+Puppycat Travel is a full-stack travel-planning application. Users keep a Trip
+conversation, generate a verified daily itinerary in the background, review a
+Visa checklist grounded in official sources, and download a concise visa
+itinerary PDF.
 
-## Project layout
+## Architecture
 
 ```text
-apps/
-  api/
-    app/       FastAPI configuration, database models, auth, and Trip APIs
-    tests/     PostgreSQL-backed API integration tests
-    alembic/   Initial PostgreSQL migration
-  web/         Next.js visual shell, authentication state, and account pages
-docker-compose.yml
+Browser
+  └─ Next.js web (`apps/web`, port 3000)
+       └─ `/api/*` rewrite
+            └─ FastAPI (`apps/api`, host port 8001 / container port 8000)
+                 ├─ PostgreSQL 16 (Trips, itineraries, jobs, cache)
+                 ├─ Gemini (chat, extraction, itinerary and visa structuring)
+                 ├─ Google Places (destination and place verification)
+                 ├─ Tavily (official visa-source discovery)
+                 └─ Open-Meteo (per-day forecast)
 ```
 
-Registration uses the configured `SIGNUP_CODE`. After registering or signing in, the browser stores the access token locally, restores the account on refresh, and sends the token to protected API routes. The Profile page edits the display name and passport country codes.
+The API owns authentication, authorization, persistence, external calls, and
+PDF rendering. The web stores the access token in the browser and uses the
+Next.js `/api` rewrite for every API request. Authentication responses use
+`Cache-Control: no-store`.
 
-An authenticated user can create a Trip by sending the first message, reopen it at `/trips/{trip_id}`, rename or delete it from the Sidebar, and recover saved messages after a refresh. Every Trip read and mutation is scoped to its owner.
+Plan generation is an asynchronous, idempotent job. `POST /plan` returns a
+queued job immediately; API workers generate the itinerary and the active Trip
+page polls only while it is queued or running. Gemini latency therefore does
+not hold the Create/Update Plan button open, and completed plans survive page
+navigation and refresh.
 
-The implemented Trip API surface is:
+## Requirements
 
-- `POST /api/trips`
-- `GET /api/trips`
-- `GET /api/trips/{trip_id}`
-- `PATCH /api/trips/{trip_id}`
-- `DELETE /api/trips/{trip_id}`
-- `POST /api/trips/{trip_id}/chat`
+Docker Compose is the only prerequisite for the complete local stack.
+
+For non-Docker development, use Python 3.11+, Node.js 24+, npm, and PostgreSQL
+16.
+
+## Configuration
+
+Copy the example only when you need to override Compose defaults:
+
+```bash
+cp .env.example .env
+```
+
+Never commit `.env` or real API keys. The API starts without external keys, but
+chat and itinerary generation require Gemini. Places, Tavily, and Mapbox
+features degrade gracefully when their optional keys are absent.
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | Docker | PostgreSQL credentials and database name. |
+| `JWT_SECRET` | Production | Long random secret for access-token signing. |
+| `JWT_ALGORITHM` | No | JWT algorithm; default `HS256`. |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | No | Token lifetime; default `10080` (7 days). |
+| `SIGNUP_CODE` | Production | Private registration code. |
+| `GEMINI_API_KEY` | Chat/planning | Gemini API key. |
+| `GEMINI_DEFAULT_MODEL` | No | Preferred Gemini model before fallback discovery. |
+| `GOOGLE_PLACES_API_KEY` | Place verification | Google Places API key. |
+| `TAVILY_API_KEY` | Visa sources | Tavily API key. |
+| `NEXT_PUBLIC_MAPBOX_TOKEN` | Map | Public Mapbox token embedded during web build. |
+| `CORS_ALLOW_ORIGINS` | Direct API browser access | Comma-separated allowed origins. |
+| `API_HTTP_PROXY`, `API_HTTPS_PROXY`, `API_NO_PROXY` | No | API-container outbound proxy settings. |
+
+`API_INTERNAL_BASE_URL` is not needed by Docker Compose: Compose fixes the
+web-to-API address at `http://api:8000`. It is used when the web is deployed
+separately, such as on Vercel.
 
 ## Start with Docker Compose
 
-Docker is the only local prerequisite for the complete stack.
+From the repository root:
 
 ```bash
 docker compose up --build
 ```
 
-Then open:
+The API container runs `alembic upgrade head` before Uvicorn starts, so a fresh
+database is migrated automatically. Open:
 
-- Web: http://localhost:3000
-- API health: http://localhost:8001/health
-- PostgreSQL: localhost:5432
+- Web: <http://127.0.0.1:3000>
+- API health: <http://127.0.0.1:8001/health>
+- API OpenAPI docs: <http://127.0.0.1:8001/docs>
+- PostgreSQL from the host: `127.0.0.1:5432`
 
-The Compose defaults are safe for local development. Copy `.env.example` to `.env` only when you need to override them, and never commit real secrets.
+The mapping `8001:8000` means the API listens on port 8000 inside its container
+and is exposed as 8001 only to the host. The web container reaches `api:8000`
+over the Compose network; it does not use host port 8001.
+
+For a repeatable container check after configuring services, run:
+
+```bash
+bash scripts/smoke.sh
+```
+
+It builds and starts Compose, checks API health and the web page, and confirms
+that a web `/api` request reaches the API by expecting an unauthenticated 401.
 
 ## Run without Docker
 
-The API requires Python 3.11 or newer:
+Start PostgreSQL and set `DATABASE_URL`, `JWT_SECRET`, and `SIGNUP_CODE` in
+your shell (or a local, uncommitted `.env`). Then start the API:
 
 ```bash
 cd apps/api
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -e '.[test]'
 alembic upgrade head
 uvicorn app.main:app --reload --port 8001
 ```
 
-`alembic upgrade head` requires a running PostgreSQL instance and a matching `DATABASE_URL`. The API Docker image runs this migration automatically before starting Uvicorn.
-
-The web application requires Node.js 20.9 or newer:
+Start the web in a second terminal:
 
 ```bash
 cd apps/web
@@ -66,28 +119,72 @@ npm ci
 npm run dev
 ```
 
-When both applications run directly on the host, Next.js forwards `/api/*` requests to `http://localhost:8001` by default.
+For direct host development, the Next.js rewrite defaults to
+`http://localhost:8001`.
 
-## Run API tests
+## API surface
 
-The integration tests use an isolated PostgreSQL database on port 5433 and never load the project `.env` file:
+All `/api` routes except registration and login require a bearer token. A user
+can only read or mutate their own Trips.
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/auth/register` | Register with `SIGNUP_CODE`. |
+| `POST` | `/api/auth/login` | Sign in and receive a bearer token. |
+| `GET` | `/api/auth/me` | Restore the authenticated user. |
+| `PATCH` | `/api/auth/profile` | Update display name and passport countries. |
+| `POST` | `/api/trips` | Create a Trip. |
+| `GET` | `/api/trips` | List the current user's Trips. |
+| `GET` | `/api/trips/{trip_id}` | Read chat, itinerary, and generation state. |
+| `PATCH` | `/api/trips/{trip_id}` | Rename a Trip. |
+| `DELETE` | `/api/trips/{trip_id}` | Delete a Trip and related records. |
+| `POST` | `/api/trips/{trip_id}/chat` | Stream a Gemini response as NDJSON. |
+| `POST` | `/api/trips/{trip_id}/plan` | Queue a plan job (`202 Accepted`). |
+| `GET` | `/api/trips/{trip_id}/visa` | Get grounded Visa checklists. |
+| `POST` | `/api/trips/{trip_id}/documents/itinerary` | Download the latest itinerary PDF. |
+| `GET` | `/health` | Unauthenticated process health check. |
+
+## Test and verification
+
+Install API test dependencies and web dependencies once for the non-Docker
+workflow, then run:
 
 ```bash
-docker compose --env-file /dev/null -f docker-compose.test.yml -p puppycat-test up -d --wait
-cd apps/api
-pip install -e '.[test]'
-DATABASE_URL=postgresql+asyncpg://puppycat_test:puppycat_test@127.0.0.1:5433/puppycat_test \
-JWT_SECRET=test-only-jwt-secret-at-least-32-bytes \
-SIGNUP_CODE=test-signup-code \
-alembic upgrade head
-DATABASE_URL=postgresql+asyncpg://puppycat_test:puppycat_test@127.0.0.1:5433/puppycat_test \
-JWT_SECRET=test-only-jwt-secret-at-least-32-bytes \
-SIGNUP_CODE=test-signup-code \
-pytest
-cd ../..
-docker compose --env-file /dev/null -f docker-compose.test.yml -p puppycat-test down
+bash scripts/test.sh
 ```
 
-## Vercel
+The script starts an isolated `puppycat_test` PostgreSQL on port 5433 with
+`--env-file /dev/null`; it never loads the project `.env`. It applies all
+migrations, runs the API suite, type-checks the web application, builds the
+production web bundle, and stops the isolated test database on exit.
 
-Create a Vercel project with `apps/web` as its root directory. The included `vercel.json` uses the standard Next.js build and sets the framework explicitly. Configure production environment variables in Vercel rather than committing them.
+Before release, perform one manual end-to-end smoke test with real configured
+services:
+
+1. Register, sign in, and add a passport country in Settings.
+2. Create a Trip, chat, and refresh to confirm persistence.
+3. Create a plan, navigate away if desired, then return after completion.
+4. Review Guide notices, daily city/country, weather, accommodation, and
+   intercity transport.
+5. Open the Visa checklist and confirm its official-source links.
+6. Download the itinerary PDF and verify its date/city/accommodation/transport
+   table.
+
+## Vercel web deployment
+
+Deploy `apps/web` as the Vercel project root. The included
+[`vercel.json`](apps/web/vercel.json) selects the Next.js build. Configure:
+
+- `API_INTERNAL_BASE_URL`: publicly reachable HTTPS URL of the separately
+  deployed API, without a trailing `/api`.
+- `NEXT_PUBLIC_MAPBOX_TOKEN`: optional Mapbox public token, set before build.
+
+`apps/web/next.config.mjs` rewrites `/api/:path*` server-side to
+`${API_INTERNAL_BASE_URL}/api/:path*`, so the browser continues to use
+same-origin `/api` calls, including streamed chat. Plan queuing returns `202`
+instead of waiting for Gemini, so it remains within Vercel request-duration
+limits.
+
+Deploy the API and PostgreSQL separately, run `alembic upgrade head` as part of
+that deployment, set production secrets there, and set `CORS_ALLOW_ORIGINS`
+only when a browser accesses the API directly.

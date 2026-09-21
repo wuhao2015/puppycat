@@ -17,7 +17,6 @@ class Settings(BaseSettings):
     gemini_default_model: str = "gemini-3.7-flash"
     google_places_api_key: str = ""
     tavily_api_key: str = ""
-    next_public_mapbox_token: str = ""
 
     cors_allow_origins: str = "http://localhost:3000"
 
