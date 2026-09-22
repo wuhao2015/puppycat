@@ -24,7 +24,7 @@ from app.external.weather import WeatherResult
 from app.gemini import GeminiMessage
 from app.main import app
 from app.models import Itinerary as ItineraryRecord
-from app.models import Trip
+from app.models import PlanGeneration, Trip
 from app.plan_jobs import PlanGenerationRunner
 from app.schemas import Day, Item, Itinerary, TripRequest
 
@@ -57,6 +57,7 @@ class _FakePlaces:
         self.candidates = candidates
         self.detail_results = details
         self.detail_calls: list[str] = []
+        self.search_calls: list[tuple[str, int]] = []
         self.require_concurrent_search = require_concurrent_search
         self.concurrent_search_observed = False
         self._search_count = 0
@@ -65,6 +66,7 @@ class _FakePlaces:
     async def search_text(
         self, query: str, *, max_results: int = 10
     ) -> PlacesSearchResult:
+        self.search_calls.append((query, max_results))
         if self.require_concurrent_search:
             self._search_count += 1
             if self._search_count == 2:
@@ -78,6 +80,29 @@ class _FakePlaces:
     async def details(self, place_id: str) -> PlaceDetailsResult:
         self.detail_calls.append(place_id)
         return self.detail_results[place_id]
+
+
+class _InterruptibleGemini:
+    def __init__(self) -> None:
+        self.calls: list[type[BaseModel]] = []
+        self.draft_attempts = 0
+        self.first_draft_started = asyncio.Event()
+
+    async def complete_json(
+        self,
+        _messages: Sequence[GeminiMessage],
+        response_schema: type[BaseModel],
+    ) -> BaseModel:
+        self.calls.append(response_schema)
+        if response_schema is TripRequest:
+            return _request()
+        if response_schema is Itinerary:
+            self.draft_attempts += 1
+            if self.draft_attempts == 1:
+                self.first_draft_started.set()
+                await asyncio.Event().wait()
+            return _itinerary("garden")
+        raise AssertionError(f"Unexpected response schema: {response_schema}")
 
 
 class _FakeWeather:
@@ -249,6 +274,9 @@ async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
     assert response.status_code == 202
     assert duplicate.status_code == 202
     assert duplicate.json()["id"] == response.json()["id"]
+    assert response.json()["stage"] == "understanding"
+    assert response.json()["step_count"] == 0
+    assert response.json()["clarification_question"] is None
     await _append_user_message(
         trip_id,
         "Add this only in the next plan update.",
@@ -281,6 +309,101 @@ async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
     assert "Add this only in the next plan update." not in {
         message["content"] for message in extraction_payload["conversation"]
     }
+
+
+async def test_cancelled_worker_requeues_and_restarts_from_the_beginning(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _register(client, "plan-restart")
+    trip_id = await _trip_with_message(client, owner)
+    garden = _place("garden")
+    places = _FakePlaces(
+        [garden],
+        {"garden": PlaceDetailsResult(status="available", place=garden)},
+    )
+    gemini = _InterruptibleGemini()
+    _install_clients(monkeypatch, gemini, places)
+
+    queued = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    assert queued.status_code == 202
+    generation_id = queued.json()["id"]
+
+    first_run = asyncio.create_task(app.state.plan_generations.run_once())
+    await asyncio.wait_for(gemini.first_draft_started.wait(), timeout=2)
+    first_run.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_run
+
+    async with SessionLocal() as session:
+        interrupted = await session.get(PlanGeneration, generation_id)
+        assert interrupted is not None
+        assert interrupted.status == "queued"
+        assert interrupted.stage == "understanding"
+        assert interrupted.started_at is None
+        assert interrupted.step_count == 0
+        assert interrupted.tool_call_count == 0
+
+    assert await app.state.plan_generations.run_once()
+
+    async with SessionLocal() as session:
+        completed = await session.get(PlanGeneration, generation_id)
+        assert completed is not None
+        assert completed.status == "succeeded"
+        assert completed.stage == "understanding"
+        assert completed.started_at is not None
+        assert completed.step_count == 0
+        assert completed.tool_call_count == 0
+
+    assert gemini.calls.count(TripRequest) == 2
+    assert gemini.draft_attempts == 2
+    assert places.search_calls.count(("Tokyo", 1)) == 2
+    assert places.search_calls.count(
+        ("top attractions restaurants and activities in Tokyo", 20)
+    ) == 2
+    assert places.search_calls.count(("Tokyo, Japan", 1)) == 1
+
+
+async def test_needs_input_is_terminal_and_new_message_creates_generation(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _register(client, "plan-needs-input")
+    trip_id = await _trip_with_message(client, owner)
+    garden = _place("garden")
+    _install_clients(
+        monkeypatch,
+        _FakeGemini([]),
+        _FakePlaces(
+            [garden],
+            {"garden": PlaceDetailsResult(status="available", place=garden)},
+        ),
+    )
+
+    first = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    assert first.status_code == 202
+    async with SessionLocal() as session:
+        generation = await session.get(PlanGeneration, first.json()["id"])
+        assert generation is not None
+        generation.status = "needs_input"
+        generation.clarification_question = "Which Springfield do you mean?"
+        await session.commit()
+
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+    assert detail["plan_generation"]["status"] == "needs_input"
+    assert detail["plan_generation"]["clarification_question"] == (
+        "Which Springfield do you mean?"
+    )
+
+    unchanged = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    assert unchanged.json()["id"] == first.json()["id"]
+    assert unchanged.json()["status"] == "needs_input"
+
+    await _append_user_message(trip_id, "Springfield, Illinois.")
+    next_generation = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    assert next_generation.status_code == 202
+    assert next_generation.json()["id"] != first.json()["id"]
+    assert next_generation.json()["status"] == "queued"
 
 
 async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(

@@ -79,6 +79,10 @@ async def enqueue_plan_generation(
         session.add(generation)
     elif generation.status == "failed":
         generation.status = "queued"
+        generation.stage = "understanding"
+        generation.step_count = 0
+        generation.tool_call_count = 0
+        generation.clarification_question = None
         generation.itinerary_id = None
         generation.error_code = None
         generation.error_message = None
@@ -101,7 +105,14 @@ class PlanGenerationRunner:
             await session.execute(
                 update(PlanGeneration)
                 .where(PlanGeneration.status == "running")
-                .values(status="queued", started_at=None)
+                .values(
+                    status="queued",
+                    stage="understanding",
+                    step_count=0,
+                    tool_call_count=0,
+                    clarification_question=None,
+                    started_at=None,
+                )
             )
             await session.commit()
         self._tasks = [
@@ -163,6 +174,10 @@ async def _claim_next_generation() -> str | None:
             return None
 
         generation.status = "running"
+        generation.stage = "understanding"
+        generation.step_count = 0
+        generation.tool_call_count = 0
+        generation.clarification_question = None
         generation.started_at = datetime.now(timezone.utc)
         generation.completed_at = None
         generation.error_code = None
@@ -197,7 +212,6 @@ async def _execute_generation(
             )
             .limit(1)
         )
-
         try:
             itinerary = await generate_plan(
                 session,
@@ -212,6 +226,7 @@ async def _execute_generation(
             )
             generation.itinerary_id = itinerary.id
             generation.status = "succeeded"
+            generation.clarification_question = None
             generation.completed_at = datetime.now(timezone.utc)
             await session.commit()
         except asyncio.CancelledError:
@@ -244,6 +259,10 @@ async def _requeue_generation(generation_id: str) -> None:
         if generation is None or generation.status != "running":
             return
         generation.status = "queued"
+        generation.stage = "understanding"
+        generation.step_count = 0
+        generation.tool_call_count = 0
+        generation.clarification_question = None
         generation.started_at = None
         await session.commit()
 

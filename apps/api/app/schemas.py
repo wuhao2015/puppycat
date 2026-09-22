@@ -280,6 +280,15 @@ class ItineraryResponse(BaseModel):
     created_at: datetime
 
 
+PlanGenerationStage = Literal[
+    "understanding",
+    "resolving_destination",
+    "searching_places",
+    "drafting",
+    "verifying",
+]
+
+
 class PlanGenerationResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -287,7 +296,10 @@ class PlanGenerationResponse(BaseModel):
     trip_id: str
     itinerary_id: str | None
     input_message_ts: datetime
-    status: Literal["queued", "running", "succeeded", "failed"]
+    status: Literal["queued", "running", "needs_input", "succeeded", "failed"]
+    stage: PlanGenerationStage
+    step_count: int
+    clarification_question: str | None
     error_code: str | None
     error_message: str | None
     created_at: datetime

@@ -123,7 +123,15 @@ export type PlanGeneration = {
   trip_id: string;
   itinerary_id: string | null;
   input_message_ts: string;
-  status: "queued" | "running" | "succeeded" | "failed";
+  status: "queued" | "running" | "needs_input" | "succeeded" | "failed";
+  stage:
+    | "understanding"
+    | "resolving_destination"
+    | "searching_places"
+    | "drafting"
+    | "verifying";
+  step_count: number;
+  clarification_question: string | null;
   error_code: string | null;
   error_message: string | null;
   created_at: string;

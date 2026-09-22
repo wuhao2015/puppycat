@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Integer,
     String,
     UniqueConstraint,
     func,
@@ -122,8 +123,13 @@ class PlanGeneration(Base):
     __tablename__ = "plan_generations"
     __table_args__ = (
         CheckConstraint(
-            "status IN ('queued', 'running', 'succeeded', 'failed')",
+            "status IN ('queued', 'running', 'needs_input', 'succeeded', 'failed')",
             name="ck_plan_generations_status",
+        ),
+        CheckConstraint(
+            "stage IN ('understanding', 'resolving_destination', "
+            "'searching_places', 'drafting', 'verifying')",
+            name="ck_plan_generations_stage",
         ),
         UniqueConstraint(
             "trip_id",
@@ -151,6 +157,22 @@ class PlanGeneration(Base):
         server_default=text("'queued'"),
         index=True,
     )
+    stage: Mapped[str] = mapped_column(
+        String,
+        default="understanding",
+        server_default=text("'understanding'"),
+    )
+    step_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default=text("0"),
+    )
+    tool_call_count: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default=text("0"),
+    )
+    clarification_question: Mapped[str | None] = mapped_column(String)
     error_code: Mapped[str | None] = mapped_column(String)
     error_message: Mapped[str | None] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(
