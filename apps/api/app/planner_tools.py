@@ -219,7 +219,7 @@ PLANNER_TOOL_REGISTRY = MappingProxyType(
             name="get_place_details",
             input_schema=GetPlaceDetailsInput,
             output_schema=GetPlaceDetailsOutput,
-            description="Get details for a place already known to this attempt.",
+            description="Get details for a place known to this generation.",
         ),
     }
 )
@@ -240,7 +240,7 @@ class PlannerToolLimits:
 
 
 class PlannerToolbox:
-    """Attempt-scoped registry, policy, deduplication, and Places execution."""
+    """Generation-scoped registry, policy, deduplication, and Places execution."""
 
     def __init__(
         self,
@@ -344,7 +344,7 @@ class PlannerToolbox:
         assert isinstance(arguments, GetPlaceDetailsInput)
         if arguments.place_id not in self._discovered_places:
             raise PlannerToolPolicyError(
-                "Place details require a place discovered in this attempt"
+                "Place details require a place known to this generation"
             )
 
     def _reserve_call(self, *, is_search: bool) -> None:

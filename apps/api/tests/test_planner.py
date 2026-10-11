@@ -85,7 +85,7 @@ class _FakePlaces:
 class _InterruptibleGemini:
     def __init__(self) -> None:
         self.calls: list[type[BaseModel]] = []
-        self.draft_attempts = 0
+        self.draft_call_count = 0
         self.first_draft_started = asyncio.Event()
 
     async def complete_json(
@@ -97,8 +97,8 @@ class _InterruptibleGemini:
         if response_schema is TripRequest:
             return _request()
         if response_schema is Itinerary:
-            self.draft_attempts += 1
-            if self.draft_attempts == 1:
+            self.draft_call_count += 1
+            if self.draft_call_count == 1:
                 self.first_draft_started.set()
                 await asyncio.Event().wait()
             return _itinerary("garden")
@@ -356,7 +356,7 @@ async def test_cancelled_worker_requeues_and_restarts_from_the_beginning(
         assert completed.tool_call_count == 0
 
     assert gemini.calls.count(TripRequest) == 2
-    assert gemini.draft_attempts == 2
+    assert gemini.draft_call_count == 2
     assert places.search_calls.count(("Tokyo", 1)) == 2
     assert places.search_calls.count(
         ("top attractions restaurants and activities in Tokyo", 20)
