@@ -131,6 +131,7 @@ export type PlanGeneration = {
     | "drafting"
     | "verifying";
   step_count: number;
+  tool_call_count: number;
   clarification_question: string | null;
   error_code: string | null;
   error_message: string | null;

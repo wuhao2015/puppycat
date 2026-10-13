@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  CircleAlert,
   Compass,
   LoaderCircle,
   MapPinned,
+  MessageCircleQuestion,
   RefreshCw,
   Send,
 } from "lucide-react";
@@ -18,6 +20,7 @@ import {
 
 import { useTrips } from "../lib/trips";
 import type { ChatMessage, Trip } from "../lib/types";
+import PlanGenerationStatus from "./PlanGenerationStatus";
 import TripGuide from "./TripGuide";
 import VisaChecklistPanel from "./VisaChecklistPanel";
 
@@ -42,10 +45,48 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
     (tripId ? trips.find((item) => item.id === tripId)?.title : null) ??
     trip?.title ??
     "New trip";
+  const itinerary = trip?.latest_itinerary?.data ?? null;
   const planGeneration = trip?.plan_generation ?? null;
   const generationActive =
     planGeneration?.status === "queued" || planGeneration?.status === "running";
+  const needsClarification = planGeneration?.status === "needs_input";
+  const clarificationCutoff = planGeneration?.input_message_ts
+    ? Date.parse(planGeneration.input_message_ts)
+    : Number.NaN;
+  const hasClarificationAnswer = Boolean(
+    needsClarification &&
+      trip?.chat_messages.some(
+        (chatMessage) =>
+          chatMessage.role === "user" &&
+          Date.parse(chatMessage.ts) > clarificationCutoff,
+      ),
+  );
   const planning = startingPlan || generationActive;
+  let planButtonLabel = itinerary ? "Update plan" : "Create plan";
+  if (planning) {
+    planButtonLabel = "Planning…";
+  } else if (needsClarification) {
+    planButtonLabel = hasClarificationAnswer
+      ? "Continue planning"
+      : "Answer in chat to continue";
+  } else if (planGeneration?.status === "failed") {
+    planButtonLabel = "Try planning again";
+  }
+
+  let guideStatusLabel = "Not created";
+  if (planning) {
+    guideStatusLabel = "Creating";
+  } else if (needsClarification) {
+    guideStatusLabel = "Needs input";
+  } else if (planGeneration?.status === "failed") {
+    guideStatusLabel = itinerary ? "Update failed" : "Plan failed";
+  } else if (itinerary?.verification_status === "verified") {
+    guideStatusLabel = "Verified";
+  } else if (itinerary?.verification_status === "partial") {
+    guideStatusLabel = "Partially verified";
+  } else if (itinerary) {
+    guideStatusLabel = "Verification unavailable";
+  }
 
   useEffect(() => {
     if (!tripId) {
@@ -58,6 +99,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
 
     let cancelled = false;
     setLoading(true);
+    setTrip(null);
     setError(null);
     setPlanningError(null);
     getTrip(tripId)
@@ -99,16 +141,6 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
   );
 
   useEffect(() => {
-    if (planGeneration?.status === "failed") {
-      setPlanningError(
-        planGeneration.error_message ?? "Unable to create itinerary",
-      );
-    } else if (planGeneration?.status === "succeeded") {
-      setPlanningError(null);
-    }
-  }, [planGeneration?.error_message, planGeneration?.status]);
-
-  useEffect(() => {
     if (!tripId || !generationActive) {
       return;
     }
@@ -122,12 +154,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
         if (cancelled) {
           return;
         }
-        if (updatedTrip.plan_generation?.status === "failed") {
-          setPlanningError(
-            updatedTrip.plan_generation.error_message ??
-              "Unable to create itinerary",
-          );
-        } else if (updatedTrip.plan_generation?.status === "succeeded") {
+        if (updatedTrip.plan_generation?.status === "succeeded") {
           setPlanningError(null);
         }
         setTrip(updatedTrip);
@@ -165,6 +192,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
     setError(null);
     let currentTrip = trip;
     let createdTrip: Trip | null = null;
+    let pendingUserTimestamp: string | null = null;
     let pendingAssistantTimestamp: string | null = null;
     let controller: AbortController | null = null;
 
@@ -176,10 +204,11 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
       }
       const activeTripId = currentTrip.id;
 
+      pendingUserTimestamp = new Date().toISOString();
       const userMessage: ChatMessage = {
         role: "user",
         content,
-        ts: new Date().toISOString(),
+        ts: pendingUserTimestamp,
       };
       pendingAssistantTimestamp = `pending-${Date.now()}`;
       const pendingAssistant: ChatMessage = {
@@ -246,7 +275,9 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
           return {
             ...activeTrip,
             chat_messages: activeTrip.chat_messages.filter(
-              (chatMessage) => chatMessage.ts !== pendingAssistantTimestamp,
+              (chatMessage) =>
+                chatMessage.ts !== pendingUserTimestamp &&
+                chatMessage.ts !== pendingAssistantTimestamp,
             ),
           };
         });
@@ -301,8 +332,6 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
       setStartingPlan(false);
     }
   }
-
-  const itinerary = trip?.latest_itinerary?.data ?? null;
 
   return (
     <div className="grid h-full min-h-0 min-w-0 grid-cols-1 lg:grid-cols-2">
@@ -372,8 +401,15 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
           <form className="flex items-end gap-2" onSubmit={sendMessage}>
             <textarea
               aria-label="Trip message"
+              aria-describedby={
+                needsClarification ? "plan-clarification-question" : undefined
+              }
               rows={1}
-              placeholder="Tell Puppycat about your trip…"
+              placeholder={
+                needsClarification
+                  ? "Answer Puppycat’s question…"
+                  : "Tell Puppycat about your trip…"
+              }
               className="form-input max-h-32 flex-1 resize-none"
               value={message}
               disabled={loading || sending || Boolean(tripId && !trip)}
@@ -394,6 +430,12 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
             </button>
           </form>
           {planningError && <div className="notice-error">{planningError}</div>}
+          {planGeneration && (
+            <PlanGenerationStatus
+              generation={planGeneration}
+              hasClarificationAnswer={hasClarificationAnswer}
+            />
+          )}
           <button
             type="button"
             disabled={
@@ -401,6 +443,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
               sending ||
               planning ||
               !trip ||
+              (needsClarification && !hasClarificationAnswer) ||
               !trip.chat_messages.some((chatMessage) => chatMessage.role === "user")
             }
             className="button-secondary w-full"
@@ -411,11 +454,7 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
               className={planning ? "animate-spin" : undefined}
               size={15}
             />
-            {planning
-              ? "Planning…"
-              : itinerary
-                ? "Update plan"
-                : "Create plan"}
+            {planButtonLabel}
           </button>
         </div>
       </section>
@@ -434,29 +473,9 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
             </p>
           </div>
           <span className="rounded-full border border-brand/20 bg-brand/10 px-2.5 py-1 text-xs font-medium text-brand">
-            {planning
-              ? "Creating"
-              : itinerary
-              ? itinerary.verification_status === "verified"
-                ? "Verified"
-                : itinerary.verification_status === "partial"
-                  ? "Partially verified"
-                  : "Verification unavailable"
-              : "Not created"}
+            {guideStatusLabel}
           </span>
         </div>
-
-        {planning && (
-          <div
-            className="mb-4 rounded-xl border border-brand/20 bg-brand/10 px-4 py-3 text-brand"
-            role="status"
-          >
-            <p className="text-sm font-semibold">
-              ✨ Creating your travel plan…
-            </p>
-            <p className="mt-1 text-sm">This may take a little while.</p>
-          </div>
-        )}
 
         {itinerary && trip ? (
           <TripGuide tripId={trip.id} itinerary={itinerary} />
@@ -471,6 +490,41 @@ export default function TripWorkspace({ tripId }: TripWorkspaceProps) {
               <p className="mt-4 text-sm leading-6 text-gray-500">
                 We’ll refresh this guide automatically when it’s ready. You can
                 safely leave this page.
+              </p>
+            </div>
+          </div>
+        ) : needsClarification ? (
+          <div className="panel flex min-h-[calc(100%_-_4.5rem)] items-center justify-center border-amber-200 bg-amber-50/50 p-8 text-center">
+            <div className="max-w-sm">
+              <span className="mx-auto grid size-12 place-items-center rounded-xl bg-amber-100 text-amber-700">
+                <MessageCircleQuestion aria-hidden="true" size={22} />
+              </span>
+              <h3 className="mt-4 text-sm font-semibold text-ink">
+                Puppycat needs more information
+              </h3>
+              <p className="mt-1.5 text-sm leading-6 text-gray-600">
+                {planGeneration.clarification_question ??
+                  "Please add the missing trip details in Chat."}
+              </p>
+              <p className="mt-3 text-xs font-medium text-amber-700">
+                Reply in Chat, then select Continue planning.
+              </p>
+            </div>
+          </div>
+        ) : planGeneration?.status === "failed" ? (
+          <div className="panel flex min-h-[calc(100%_-_4.5rem)] items-center justify-center border-red-200 bg-red-50/50 p-8 text-center">
+            <div className="max-w-sm">
+              <span className="mx-auto grid size-12 place-items-center rounded-xl bg-red-100 text-red-700">
+                <CircleAlert aria-hidden="true" size={22} />
+              </span>
+              <h3 className="mt-4 text-sm font-semibold text-ink">
+                Planning stopped
+              </h3>
+              <p className="mt-1.5 text-sm leading-6 text-gray-600">
+                {planGeneration.error_message ?? "Unable to create itinerary"}
+              </p>
+              <p className="mt-3 text-xs font-medium text-red-700">
+                Update your trip details if needed, then try again.
               </p>
             </div>
           </div>
