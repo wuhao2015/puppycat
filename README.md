@@ -155,8 +155,8 @@ bash scripts/test.sh
 
 The script starts an isolated `puppycat_test` PostgreSQL on port 5433 with
 `--env-file /dev/null`; it never loads the project `.env`. It applies all
-migrations, runs the API suite, type-checks the web application, builds the
-production web bundle, and stops the isolated test database on exit.
+migrations, runs the API and Web suites, type-checks the web application,
+builds the production web bundle, and stops the isolated test database on exit.
 
 Before release, perform one manual end-to-end smoke test with real configured
 services:

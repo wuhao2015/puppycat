@@ -292,6 +292,58 @@ async def test_function_turn_sends_declarations_and_prior_results(
     }
 
 
+async def test_function_turn_429_falls_back_and_continues(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_content = types.Content(
+        role="model",
+        parts=[
+            types.Part(
+                function_call=types.FunctionCall(
+                    id="call-1",
+                    name="resolve_destination",
+                    args={"query": "Tokyo"},
+                )
+            )
+        ],
+    )
+    client, models = _make_client(
+        monkeypatch,
+        completions={
+            PRIMARY_MODEL: [_api_error(429)],
+            BACKUP_MODEL: [_response(content=response_content)],
+        },
+    )
+
+    turn = await client.complete_function_turn(
+        _messages(),
+        [
+            GeminiFunctionDefinition(
+                name="resolve_destination",
+                description="Resolve destination",
+                parameters={
+                    "type": "object",
+                    "properties": {"query": {"type": "string"}},
+                    "required": ["query"],
+                },
+            )
+        ],
+    )
+
+    assert turn.calls == (
+        GeminiFunctionCall(
+            name="resolve_destination",
+            arguments={"query": "Tokyo"},
+            call_id="call-1",
+        ),
+    )
+    assert [call["model"] for call in models.complete_calls] == [
+        PRIMARY_MODEL,
+        BACKUP_MODEL,
+    ]
+    assert client.active_model == BACKUP_MODEL
+
+
 @pytest.mark.parametrize(
     ("status_code", "expected_error_code"),
     [

@@ -5,6 +5,7 @@ import json
 from collections.abc import Sequence
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
+from typing import Any, NoReturn
 from uuid import uuid4
 
 import pytest
@@ -12,6 +13,7 @@ from httpx import AsyncClient
 from pydantic import BaseModel
 from sqlalchemy import func, select
 
+import app.plan_jobs as plan_jobs_module
 from app.db import SessionLocal
 from app.external.places import (
     Place,
@@ -64,6 +66,17 @@ class _FakeGemini:
     ) -> GeminiFunctionTurn:
         self.function_turn_count += 1
         assert self.request is not None
+        if exchanges:
+            last_results = exchanges[-1].results
+            if any(
+                isinstance(output := result.response.get("output"), dict)
+                and output.get("requires_clarification")
+                for result in last_results
+            ):
+                return _function_turn(
+                    "request_clarification",
+                    {"question": "Which Springfield do you mean?"},
+                )
         if (
             self.request.destination is None
             or self.request.start_date is None
@@ -493,6 +506,34 @@ async def test_needs_input_is_terminal_and_new_message_creates_generation(
     assert next_generation.json()["status"] == "queued"
 
 
+async def test_ambiguous_destination_reaches_needs_input_without_guessing(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _register(client, "plan-ambiguous")
+    trip_id = await _trip_with_message(client, owner)
+    springfields = [
+        _place("springfield-illinois"),
+        _place("springfield-massachusetts"),
+    ]
+    places = _FakePlaces(springfields, {})
+    gemini = _FakeGemini([_request(destination="Springfield")])
+    _install_clients(monkeypatch, gemini, places)
+
+    queued = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    assert queued.status_code == 202
+    await _run_queued_generation()
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+
+    assert detail["plan_generation"]["status"] == "needs_input"
+    assert detail["plan_generation"]["clarification_question"] == (
+        "Which Springfield do you mean?"
+    )
+    assert places.search_calls == [("Springfield", 5)]
+    assert gemini.function_turn_count == 2
+    assert await _itinerary_count(trip_id) == 0
+
+
 async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -634,3 +675,47 @@ async def test_update_adds_a_version_reuses_places_and_failure_keeps_latest(
     assert detail["latest_itinerary"]["id"] == updated_detail[
         "latest_itinerary"
     ]["id"]
+
+
+async def test_itinerary_and_success_status_are_committed_atomically(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await _register(client, "plan-atomic")
+    trip_id = await _trip_with_message(client, owner)
+    garden = _place("garden")
+    places = _FakePlaces(
+        [garden],
+        {"garden": PlaceDetailsResult(status="available", place=garden)},
+    )
+    _install_clients(
+        monkeypatch,
+        _FakeGemini([_request(), _itinerary("garden")]),
+        places,
+    )
+    real_generate_plan = plan_jobs_module.generate_plan
+
+    async def fail_after_itinerary_flush(
+        *args: Any,
+        **kwargs: Any,
+    ) -> NoReturn:
+        result = await real_generate_plan(*args, **kwargs)
+        assert result.itinerary is not None
+        raise RuntimeError("fail before generation success commit")
+
+    monkeypatch.setattr(
+        plan_jobs_module,
+        "generate_plan",
+        fail_after_itinerary_flush,
+    )
+
+    queued = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
+    assert queued.status_code == 202
+    await _run_queued_generation()
+    detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
+
+    assert detail["plan_generation"]["status"] == "failed"
+    assert detail["plan_generation"]["error_code"] == "plan_generation_failed"
+    assert detail["latest_itinerary"] is None
+    assert detail["destination"] is None
+    assert await _itinerary_count(trip_id) == 0

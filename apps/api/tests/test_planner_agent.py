@@ -16,6 +16,7 @@ from app.gemini import (
 )
 from app.planner_agent import (
     MAX_AGENT_TURNS,
+    MAX_FUNCTION_CALLS_PER_TURN,
     PlannerDraftEvaluation,
     run_planner_agent,
 )
@@ -270,6 +271,39 @@ async def test_agent_turn_limit_fails_explicitly() -> None:
     assert last_exchange.results[0].response["error"]["code"] == (
         "tool_call_rejected"
     )
+
+
+async def test_agent_rejects_excessive_calls_before_running_tools() -> None:
+    gemini = _FakeGemini(
+        [
+            GeminiFunctionTurn(
+                calls=tuple(
+                    GeminiFunctionCall(
+                        name="resolve_destination",
+                        arguments={"query": "Tokyo"},
+                    )
+                    for _ in range(MAX_FUNCTION_CALLS_PER_TURN + 1)
+                )
+            )
+        ]
+    )
+    places = _FakePlaces({})
+
+    with pytest.raises(AgentExecutionLimitError):
+        await run_planner_agent(
+            clients=SimpleNamespace(gemini=gemini, places=places),
+            request=TripRequest(
+                destination="Tokyo",
+                start_date="2026-09-20",
+                end_date="2026-09-20",
+            ),
+            previous_itinerary=None,
+            new_user_messages=[],
+            progress=_ignore_progress,
+            evaluate_draft=_accept_draft,
+        )
+
+    assert places.calls == []
 
 
 async def _record_progress(

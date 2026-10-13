@@ -10,12 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.clients import AppClients
 from app.errors import (
-    InvalidTripDatesError,
     ItineraryGenerationError,
-    MissingTripFieldsError,
     NoNewTripRequirementsError,
 )
-from app.external.places import Place, PlacesSearchResult
 from app.gemini import GeminiMessage
 from app.models import Itinerary as ItineraryRecord
 from app.models import Trip
@@ -38,17 +35,6 @@ Use ISO dates. Return null for a destination or date that the user has not suppl
 Set destination to the complete user-facing destination summary. Put each distinct
 city, region, or country that must be resolved separately in destination_facts.
 Preferences must not repeat destination or dates. Never invent missing facts."""
-
-DRAFT_PROMPT = """Create a practical daily itinerary matching the supplied request.
-Every place item must use a place_id from candidate_places. Activities without a
-specific candidate must be kind=generic and have place_id=null. Cover every date
-exactly once in chronological order, use unique item IDs, and keep item times
-within one day. Every day must include the city and country where the traveller
-will stay overnight. Set intercity_transport only when travelling between
-overnight cities; otherwise return null. Do not invent verification results,
-warnings, place details, coordinates, weather, or source status; those are added
-by the server."""
-
 
 @dataclass(frozen=True)
 class PlanGenerationResult:
@@ -259,85 +245,6 @@ def _extraction_messages(
             content=json.dumps(context, ensure_ascii=False, default=str),
         ),
     ]
-
-
-def _draft_messages(
-    request: TripRequest,
-    candidates: list[Place],
-    *,
-    previous_data: Itinerary | None,
-    new_user_messages: list[ChatMessage],
-) -> list[GeminiMessage]:
-    payload = {
-        "trip_request": request.model_dump(mode="json"),
-        "candidate_places": [place.model_dump(mode="json") for place in candidates],
-        "previous_itinerary": (
-            previous_data.model_dump(mode="json") if previous_data else None
-        ),
-        "new_user_requests": [
-            message.model_dump(mode="json") for message in new_user_messages
-        ],
-    }
-    return [
-        GeminiMessage(role="system", content=DRAFT_PROMPT),
-        GeminiMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-    ]
-
-
-def _replacement_messages(
-    itinerary: Itinerary,
-    blocker_place_ids: set[str],
-    candidates: list[Place],
-) -> list[GeminiMessage]:
-    allowed = [
-        place.model_dump(mode="json")
-        for place in candidates
-        if place.place_id not in blocker_place_ids
-    ]
-    payload = {
-        "itinerary": itinerary.model_dump(mode="json"),
-        "blocked_place_ids": sorted(blocker_place_ids),
-        "candidate_places": allowed,
-    }
-    return [
-        GeminiMessage(
-            role="system",
-            content=(
-                "Replace every blocked place once while preserving all unaffected "
-                "items. Use only the supplied candidate place IDs or an explicit "
-                "generic activity. Return the complete itinerary."
-            ),
-        ),
-        GeminiMessage(role="user", content=json.dumps(payload, ensure_ascii=False)),
-    ]
-
-
-def _validate_request(request: TripRequest) -> None:
-    missing = [
-        field
-        for field in ("destination", "start_date", "end_date")
-        if getattr(request, field) is None
-    ]
-    if missing:
-        raise MissingTripFieldsError(missing)
-    assert request.start_date is not None
-    assert request.end_date is not None
-    if request.end_date < request.start_date:
-        raise InvalidTripDatesError()
-
-
-def _candidate_places(
-    destination: PlacesSearchResult,
-    candidates: PlacesSearchResult,
-) -> list[Place]:
-    return _merge_places(destination.places, candidates.places)
-
-
-def _merge_places(first: list[Place], second: list[Place]) -> list[Place]:
-    by_id: dict[str, Place] = {}
-    for place in [*first, *second]:
-        by_id.setdefault(place.place_id, place)
-    return list(by_id.values())
 
 
 async def _prepare_draft(
