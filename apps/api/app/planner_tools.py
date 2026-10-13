@@ -16,12 +16,15 @@ from pydantic import (
 
 from app.clients import AppClients
 from app.external.places import Place, PlacesUnavailableReason
+from app.schemas import Itinerary
 
 
 PlannerToolName = Literal[
     "resolve_destination",
     "search_places",
     "get_place_details",
+    "submit_draft",
+    "request_clarification",
 ]
 PlaceSearchCategory = Literal[
     "attraction",
@@ -34,6 +37,7 @@ ToolAvailability = Literal["available", "unavailable"]
 DetailsAvailability = Literal["available", "not_found", "unavailable"]
 
 MAX_TOOL_CALLS = 40
+MAX_DESTINATION_RESOLUTIONS = 10
 MAX_PLACE_SEARCHES = 20
 MAX_SEARCH_RESULTS = 20
 MAX_DESTINATION_CANDIDATES = 5
@@ -127,6 +131,26 @@ class GetPlaceDetailsInput(BaseModel):
         return normalized
 
 
+class SubmitDraftInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    itinerary: Itinerary
+
+
+class RequestClarificationInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=300)
+
+    @field_validator("question")
+    @classmethod
+    def normalize_question(cls, value: str) -> str:
+        normalized = _reject_url(value)
+        if not normalized:
+            raise ValueError("Clarification question cannot be empty")
+        return normalized
+
+
 class ResolveDestinationOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -181,7 +205,11 @@ class GetPlaceDetailsOutput(BaseModel):
 
 
 PlannerToolInput: TypeAlias = (
-    ResolveDestinationInput | SearchPlacesInput | GetPlaceDetailsInput
+    ResolveDestinationInput
+    | SearchPlacesInput
+    | GetPlaceDetailsInput
+    | SubmitDraftInput
+    | RequestClarificationInput
 )
 PlannerToolOutput: TypeAlias = (
     ResolveDestinationOutput | SearchPlacesOutput | GetPlaceDetailsOutput
@@ -192,7 +220,7 @@ PlannerToolOutput: TypeAlias = (
 class PlannerToolDefinition:
     name: PlannerToolName
     input_schema: type[BaseModel]
-    output_schema: type[BaseModel]
+    output_schema: type[BaseModel] | None
     description: str
 
 
@@ -221,6 +249,24 @@ PLANNER_TOOL_REGISTRY = MappingProxyType(
             output_schema=GetPlaceDetailsOutput,
             description="Get details for a place known to this generation.",
         ),
+        "submit_draft": PlannerToolDefinition(
+            name="submit_draft",
+            input_schema=SubmitDraftInput,
+            output_schema=None,
+            description=(
+                "Submit the complete itinerary after all destinations are resolved "
+                "and enough place searches have been completed."
+            ),
+        ),
+        "request_clarification": PlannerToolDefinition(
+            name="request_clarification",
+            input_schema=RequestClarificationInput,
+            output_schema=None,
+            description=(
+                "End planning with one concise question only when required trip "
+                "facts are missing or a destination is genuinely ambiguous."
+            ),
+        ),
     }
 )
 
@@ -228,13 +274,20 @@ PLANNER_TOOL_REGISTRY = MappingProxyType(
 @dataclass(frozen=True)
 class PlannerToolLimits:
     max_tool_calls: int = MAX_TOOL_CALLS
+    max_destination_resolutions: int = MAX_DESTINATION_RESOLUTIONS
     max_place_searches: int = MAX_PLACE_SEARCHES
 
     def __post_init__(self) -> None:
         if self.max_tool_calls < 1:
             raise ValueError("max_tool_calls must be positive")
+        if self.max_destination_resolutions < 1:
+            raise ValueError("max_destination_resolutions must be positive")
         if self.max_place_searches < 1:
             raise ValueError("max_place_searches must be positive")
+        if self.max_destination_resolutions > self.max_tool_calls:
+            raise ValueError(
+                "max_destination_resolutions cannot exceed max_tool_calls"
+            )
         if self.max_place_searches > self.max_tool_calls:
             raise ValueError("max_place_searches cannot exceed max_tool_calls")
 
@@ -252,7 +305,7 @@ class PlannerToolbox:
     ) -> None:
         self._clients = clients
         self._destination_facts = {
-            _normalized_key(fact)
+            _normalized_key(fact): _normalize_text(fact)
             for fact in destination_facts
             if _normalize_text(fact)
         }
@@ -262,10 +315,16 @@ class PlannerToolbox:
             for place in (known_places or [])
         }
         self._resolved_areas: dict[str, Place] = {}
+        self._resolved_fact_areas: dict[str, str] = {}
+        self._attempted_destination_facts: set[str] = set()
+        self._ambiguous_destination_facts: set[str] = set()
         self._ambiguous_area_ids: set[str] = set()
+        self._attempted_search_area_ids: set[str] = set()
+        self._searched_area_ids: set[str] = set()
         self._discovered_places: dict[str, Place] = dict(self._known_places)
         self._results: dict[str, PlannerToolOutput] = {}
         self.tool_call_count = 0
+        self.destination_resolution_count = 0
         self.place_search_count = 0
 
     @property
@@ -274,6 +333,42 @@ class PlannerToolbox:
             place_id: place.model_copy(deep=True)
             for place_id, place in self._discovered_places.items()
         }
+
+    @property
+    def has_ambiguous_destination(self) -> bool:
+        return bool(self._ambiguous_destination_facts)
+
+    @property
+    def ready_to_submit(self) -> bool:
+        facts = set(self._destination_facts)
+        return (
+            bool(facts)
+            and facts <= self._attempted_destination_facts
+            and not self._ambiguous_destination_facts
+            and set(self._resolved_fact_areas.values())
+            <= self._attempted_search_area_ids
+        )
+
+    @property
+    def places_available(self) -> bool:
+        return (
+            self.ready_to_submit
+            and len(self._resolved_fact_areas) == len(self._destination_facts)
+            and set(self._resolved_fact_areas.values()) <= self._searched_area_ids
+        )
+
+    def parse_arguments(
+        self,
+        tool_name: str,
+        arguments: object,
+    ) -> PlannerToolInput:
+        definition = PLANNER_TOOL_REGISTRY.get(tool_name)
+        if definition is None:
+            raise UnknownPlannerToolError(f"Unknown Planner tool: {tool_name}")
+        return self._parse_arguments(definition, arguments)
+
+    def record_terminal_call(self) -> None:
+        self._reserve_call()
 
     async def execute(
         self,
@@ -284,6 +379,11 @@ class PlannerToolbox:
         if definition is None:
             raise UnknownPlannerToolError(f"Unknown Planner tool: {tool_name}")
 
+        if definition.output_schema is None:
+            raise PlannerToolPolicyError(
+                f"Terminal Planner tool must be handled by the Agent: {tool_name}"
+            )
+
         parsed = self._parse_arguments(definition, arguments)
         self._enforce_policy(tool_name, parsed)
         call_key = self._call_key(tool_name, parsed)
@@ -291,8 +391,10 @@ class PlannerToolbox:
         if cached is not None:
             return cached.model_copy(deep=True)
 
-        is_search = tool_name in {"resolve_destination", "search_places"}
-        self._reserve_call(is_search=is_search)
+        self._reserve_call(
+            is_destination_resolution=tool_name == "resolve_destination",
+            is_place_search=tool_name == "search_places",
+        )
         if tool_name == "resolve_destination":
             output = await self._resolve_destination(parsed)
         elif tool_name == "search_places":
@@ -347,13 +449,31 @@ class PlannerToolbox:
                 "Place details require a place known to this generation"
             )
 
-    def _reserve_call(self, *, is_search: bool) -> None:
+    def _reserve_call(
+        self,
+        *,
+        is_destination_resolution: bool = False,
+        is_place_search: bool = False,
+    ) -> None:
         if self.tool_call_count >= self._limits.max_tool_calls:
             raise PlannerToolLimitError("Planner tool call limit reached")
-        if is_search and self.place_search_count >= self._limits.max_place_searches:
+        if (
+            is_destination_resolution
+            and self.destination_resolution_count
+            >= self._limits.max_destination_resolutions
+        ):
+            raise PlannerToolLimitError(
+                "Planner destination resolution limit reached"
+            )
+        if (
+            is_place_search
+            and self.place_search_count >= self._limits.max_place_searches
+        ):
             raise PlannerToolLimitError("Planner place search limit reached")
         self.tool_call_count += 1
-        if is_search:
+        if is_destination_resolution:
+            self.destination_resolution_count += 1
+        if is_place_search:
             self.place_search_count += 1
 
     async def _resolve_destination(
@@ -370,6 +490,10 @@ class PlannerToolbox:
             limit=MAX_DESTINATION_CANDIDATES,
         )
         requires_clarification = len(candidates) > 1
+        fact_key = _normalized_key(arguments.query)
+        self._attempted_destination_facts.add(fact_key)
+        self._resolved_fact_areas.pop(fact_key, None)
+        self._ambiguous_destination_facts.discard(fact_key)
         if result.status == "available":
             for place in candidates:
                 self._discovered_places.setdefault(place.place_id, place)
@@ -379,6 +503,10 @@ class PlannerToolbox:
                 elif candidates:
                     self._ambiguous_area_ids.discard(place.place_id)
                     self._resolved_areas[place.place_id] = place
+            if requires_clarification:
+                self._ambiguous_destination_facts.add(fact_key)
+            elif len(candidates) == 1:
+                self._resolved_fact_areas[fact_key] = candidates[0].place_id
         return ResolveDestinationOutput(
             status=result.status,
             candidates=candidates,
@@ -410,8 +538,10 @@ class PlannerToolbox:
             query,
             max_results=arguments.max_results,
         )
+        self._attempted_search_area_ids.add(arguments.area_place_id)
         places = _unique_places(result.places, limit=arguments.max_results)
         if result.status == "available":
+            self._searched_area_ids.add(arguments.area_place_id)
             for place in places:
                 self._discovered_places.setdefault(place.place_id, place)
         return SearchPlacesOutput(

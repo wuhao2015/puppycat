@@ -12,7 +12,7 @@ from app.db import SessionLocal
 from app.errors import GeminiError, NoNewTripRequirementsError, PlanningError
 from app.models import PlanGeneration, Trip
 from app.planner import generate_plan
-from app.schemas import ChatMessage
+from app.schemas import ChatMessage, PlanGenerationStage
 
 
 logger = logging.getLogger(__name__)
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 ACTIVE_GENERATION_STATUSES = ("queued", "running")
 POLL_INTERVAL_SECONDS = 2.0
 WORKER_COUNT = 2
+PLAN_EXECUTION_TIMEOUT_SECONDS = 300
 
 
 async def latest_plan_generation(
@@ -213,26 +214,60 @@ async def _execute_generation(
             .limit(1)
         )
         try:
-            itinerary = await generate_plan(
-                session,
-                trip=trip,
-                clients=clients,
-                through=generation.input_message_ts,
-                previous_input_message_ts=(
-                    previous_generation.input_message_ts
-                    if previous_generation is not None
-                    else None
-                ),
-            )
-            generation.itinerary_id = itinerary.id
-            generation.status = "succeeded"
-            generation.clarification_question = None
+            async def report_progress(
+                stage: PlanGenerationStage,
+                step_count: int,
+                tool_call_count: int,
+            ) -> None:
+                await _update_generation_progress(
+                    generation_id,
+                    stage=stage,
+                    step_count=step_count,
+                    tool_call_count=tool_call_count,
+                )
+
+            async with asyncio.timeout(PLAN_EXECUTION_TIMEOUT_SECONDS):
+                result = await generate_plan(
+                    session,
+                    trip=trip,
+                    clients=clients,
+                    through=generation.input_message_ts,
+                    previous_input_message_ts=(
+                        previous_generation.input_message_ts
+                        if previous_generation is not None
+                        else None
+                    ),
+                    progress=report_progress,
+                )
+            generation.step_count = result.step_count
+            generation.tool_call_count = result.tool_call_count
             generation.completed_at = datetime.now(timezone.utc)
+            if result.clarification_question is not None:
+                generation.status = "needs_input"
+                generation.itinerary_id = None
+                generation.clarification_question = result.clarification_question
+                await session.commit()
+                return
+
+            assert result.itinerary is not None
+            generation.itinerary_id = result.itinerary.id
+            generation.status = "succeeded"
+            generation.stage = "verifying"
+            generation.clarification_question = None
             await session.commit()
         except asyncio.CancelledError:
             await session.rollback()
             await _requeue_generation(generation_id)
             raise
+        except TimeoutError:
+            await session.rollback()
+            await _fail_generation(
+                generation_id,
+                code="agent_execution_limit",
+                message=(
+                    "Puppycat could not finish planning within the safety limits"
+                ),
+            )
         except (GeminiError, PlanningError) as error:
             await session.rollback()
             await _fail_generation(
@@ -251,6 +286,29 @@ async def _execute_generation(
                 code="plan_generation_failed",
                 message="Puppycat could not create the travel plan",
             )
+
+
+async def _update_generation_progress(
+    generation_id: str,
+    *,
+    stage: PlanGenerationStage,
+    step_count: int,
+    tool_call_count: int,
+) -> None:
+    async with SessionLocal() as session:
+        await session.execute(
+            update(PlanGeneration)
+            .where(
+                PlanGeneration.id == generation_id,
+                PlanGeneration.status == "running",
+            )
+            .values(
+                stage=stage,
+                step_count=step_count,
+                tool_call_count=tool_call_count,
+            )
+        )
+        await session.commit()
 
 
 async def _requeue_generation(generation_id: str) -> None:

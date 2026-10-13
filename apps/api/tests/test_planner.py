@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Sequence
-from datetime import datetime, time, timedelta, timezone
+from datetime import datetime, time, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -21,7 +21,12 @@ from app.external.places import (
 )
 from app.external.search import SearchResult
 from app.external.weather import WeatherResult
-from app.gemini import GeminiMessage
+from app.gemini import (
+    GeminiFunctionCall,
+    GeminiFunctionExchange,
+    GeminiFunctionTurn,
+    GeminiMessage,
+)
 from app.main import app
 from app.models import Itinerary as ItineraryRecord
 from app.models import PlanGeneration, Trip
@@ -33,6 +38,9 @@ class _FakeGemini:
     def __init__(self, responses: Sequence[BaseModel | Exception]) -> None:
         self.responses = list(responses)
         self.calls: list[tuple[list[GeminiMessage], type[BaseModel]]] = []
+        self.request: TripRequest | None = None
+        self.function_turn_count = 0
+        self.last_itinerary: Itinerary | None = None
 
     async def complete_json(
         self,
@@ -43,7 +51,56 @@ class _FakeGemini:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
-        return response_schema.model_validate(response)
+        parsed = response_schema.model_validate(response)
+        if isinstance(parsed, TripRequest):
+            self.request = parsed
+        return parsed
+
+    async def complete_function_turn(
+        self,
+        _messages: Sequence[GeminiMessage],
+        _functions: object,
+        exchanges: Sequence[GeminiFunctionExchange] = (),
+    ) -> GeminiFunctionTurn:
+        self.function_turn_count += 1
+        assert self.request is not None
+        if (
+            self.request.destination is None
+            or self.request.start_date is None
+            or self.request.end_date is None
+            or self.request.end_date < self.request.start_date
+        ):
+            return _function_turn(
+                "request_clarification",
+                {"question": "What destination and valid travel dates should I use?"},
+            )
+        if len(exchanges) == 0:
+            return _function_turn(
+                "resolve_destination",
+                {"query": self.request.destination_facts[0]},
+            )
+        if len(exchanges) == 1:
+            return _function_turn(
+                "search_places",
+                {
+                    "area_place_id": "tokyo",
+                    "category": "attraction",
+                    "max_results": 20,
+                },
+            )
+        if self.responses:
+            response = self.responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            itinerary = Itinerary.model_validate(response)
+            self.last_itinerary = itinerary
+        else:
+            assert self.last_itinerary is not None
+            itinerary = self.last_itinerary
+        return _function_turn(
+            "submit_draft",
+            {"itinerary": itinerary.model_dump(mode="json")},
+        )
 
 
 class _FakePlaces:
@@ -73,7 +130,7 @@ class _FakePlaces:
                 self.concurrent_search_observed = True
                 self._both_searches_started.set()
             await asyncio.wait_for(self._both_searches_started.wait(), timeout=1)
-        if max_results == 1:
+        if query in {"Tokyo", "Tokyo, Japan"}:
             return PlacesSearchResult(status="available", places=[_destination()])
         return PlacesSearchResult(status="available", places=self.candidates)
 
@@ -96,13 +153,33 @@ class _InterruptibleGemini:
         self.calls.append(response_schema)
         if response_schema is TripRequest:
             return _request()
-        if response_schema is Itinerary:
-            self.draft_call_count += 1
-            if self.draft_call_count == 1:
-                self.first_draft_started.set()
-                await asyncio.Event().wait()
-            return _itinerary("garden")
         raise AssertionError(f"Unexpected response schema: {response_schema}")
+
+    async def complete_function_turn(
+        self,
+        _messages: Sequence[GeminiMessage],
+        _functions: object,
+        exchanges: Sequence[GeminiFunctionExchange] = (),
+    ) -> GeminiFunctionTurn:
+        if len(exchanges) == 0:
+            return _function_turn("resolve_destination", {"query": "Tokyo"})
+        if len(exchanges) == 1:
+            return _function_turn(
+                "search_places",
+                {
+                    "area_place_id": "tokyo",
+                    "category": "attraction",
+                    "max_results": 20,
+                },
+            )
+        self.draft_call_count += 1
+        if self.draft_call_count == 1:
+            self.first_draft_started.set()
+            await asyncio.Event().wait()
+        return _function_turn(
+            "submit_draft",
+            {"itinerary": _itinerary("garden").model_dump(mode="json")},
+        )
 
 
 class _FakeWeather:
@@ -210,6 +287,15 @@ def _itinerary(*place_ids: str) -> Itinerary:
     )
 
 
+def _function_turn(
+    name: str,
+    arguments: dict[str, object],
+) -> GeminiFunctionTurn:
+    return GeminiFunctionTurn(
+        calls=(GeminiFunctionCall(name=name, arguments=arguments),)
+    )
+
+
 def _install_clients(
     monkeypatch: pytest.MonkeyPatch,
     gemini: _FakeGemini,
@@ -250,7 +336,7 @@ async def _itinerary_count(trip_id: str) -> int:
     return count or 0
 
 
-async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
+async def test_first_plan_runs_agent_tools_and_is_owner_scoped(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -261,7 +347,6 @@ async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
     places = _FakePlaces(
         [garden],
         {"garden": PlaceDetailsResult(status="available", place=garden)},
-        require_concurrent_search=True,
     )
     gemini = _FakeGemini([_request(), _itinerary("garden")])
     _install_clients(monkeypatch, gemini, places)
@@ -282,10 +367,12 @@ async def test_first_plan_runs_searches_concurrently_and_is_owner_scoped(
         "Add this only in the next plan update.",
     )
     await _run_queued_generation()
-    assert places.concurrent_search_observed
     assert await _itinerary_count(trip_id) == 1
     detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
     assert detail["plan_generation"]["status"] == "succeeded"
+    assert detail["plan_generation"]["stage"] == "verifying"
+    assert detail["plan_generation"]["step_count"] == 3
+    assert detail["plan_generation"]["tool_call_count"] == 3
     assert detail["plan_generation"]["id"] == response.json()["id"]
     assert detail["latest_itinerary"]["data"]["days"][0]["items"][0][
         "place"
@@ -350,16 +437,16 @@ async def test_cancelled_worker_requeues_and_restarts_from_the_beginning(
         completed = await session.get(PlanGeneration, generation_id)
         assert completed is not None
         assert completed.status == "succeeded"
-        assert completed.stage == "understanding"
+        assert completed.stage == "verifying"
         assert completed.started_at is not None
-        assert completed.step_count == 0
-        assert completed.tool_call_count == 0
+        assert completed.step_count == 3
+        assert completed.tool_call_count == 3
 
     assert gemini.calls.count(TripRequest) == 2
     assert gemini.draft_call_count == 2
-    assert places.search_calls.count(("Tokyo", 1)) == 2
+    assert places.search_calls.count(("Tokyo", 5)) == 2
     assert places.search_calls.count(
-        ("top attractions restaurants and activities in Tokyo", 20)
+        ("attraction in Tokyo, Japan", 20)
     ) == 2
     assert places.search_calls.count(("Tokyo, Japan", 1)) == 1
 
@@ -423,20 +510,22 @@ async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(
     assert missing.status_code == 202
     await _run_queued_generation()
     detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
-    assert detail["plan_generation"]["status"] == "failed"
-    assert detail["plan_generation"]["error_code"] == "missing_trip_fields"
+    assert detail["plan_generation"]["status"] == "needs_input"
+    assert detail["plan_generation"]["clarification_question"] is not None
 
+    await _append_user_message(trip_id, "Use the dates I already supplied.")
     invalid_request = _request().model_copy(
         update={"start_date": datetime(2026, 9, 21).date(), "end_date": datetime(2026, 9, 20).date()}
     )
     _install_clients(monkeypatch, _FakeGemini([invalid_request]), places)
     invalid = await client.post(f"/api/trips/{trip_id}/plan", headers=owner)
     assert invalid.status_code == 202
-    assert invalid.json()["id"] == missing.json()["id"]
+    assert invalid.json()["id"] != missing.json()["id"]
     await _run_queued_generation()
     detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
-    assert detail["plan_generation"]["error_code"] == "invalid_trip_dates"
+    assert detail["plan_generation"]["status"] == "needs_input"
 
+    await _append_user_message(trip_id, "Use September 20 only.")
     _install_clients(
         monkeypatch,
         _FakeGemini([_request(), _itinerary("invented-place")]),
@@ -446,11 +535,11 @@ async def test_invalid_requests_and_unknown_place_do_not_save_a_plan(
     assert unknown.status_code == 202
     await _run_queued_generation()
     detail = (await client.get(f"/api/trips/{trip_id}", headers=owner)).json()
-    assert detail["plan_generation"]["error_code"] == "itinerary_generation_failed"
+    assert detail["plan_generation"]["error_code"] == "agent_execution_limit"
     assert await _itinerary_count(trip_id) == 0
 
 
-async def test_blocker_is_replaced_once_and_only_replacement_is_reverified(
+async def test_verification_blocker_is_returned_to_agent_for_repair(
     client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -476,10 +565,11 @@ async def test_blocker_is_replaced_once_and_only_replacement_is_reverified(
 
     assert response.status_code == 202
     assert detail["plan_generation"]["status"] == "succeeded"
+    assert detail["plan_generation"]["step_count"] == 4
+    assert detail["plan_generation"]["tool_call_count"] == 4
     assert places.detail_calls == ["closed-museum", "garden"]
     item = detail["latest_itinerary"]["data"]["days"][0]["items"][0]
     assert item["place_id"] == "garden"
-    assert all(warning["level"] != "blocker" for warning in item["warnings"])
 
 
 async def test_update_adds_a_version_reuses_places_and_failure_keeps_latest(

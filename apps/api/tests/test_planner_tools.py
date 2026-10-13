@@ -18,6 +18,7 @@ from app.planner_tools import (
     PlannerToolLimits,
     PlannerToolPolicyError,
     PlannerToolbox,
+    RequestClarificationInput,
     ResolveDestinationOutput,
     SearchPlacesOutput,
     UnknownPlannerToolError,
@@ -90,6 +91,8 @@ async def test_registry_and_arguments_reject_uncontrolled_calls() -> None:
         "resolve_destination",
         "search_places",
         "get_place_details",
+        "submit_draft",
+        "request_clarification",
     }
     with pytest.raises(TypeError):
         PLANNER_TOOL_REGISTRY["arbitrary"] = object()  # type: ignore[index]
@@ -112,6 +115,17 @@ async def test_registry_and_arguments_reject_uncontrolled_calls() -> None:
     assert places.search_calls == []
     assert places.detail_calls == []
     assert toolbox.tool_call_count == 0
+    clarification = toolbox.parse_arguments(
+        "request_clarification",
+        {"question": "Which Springfield do you mean?"},
+    )
+    assert isinstance(clarification, RequestClarificationInput)
+    with pytest.raises(PlannerToolArgumentsError):
+        toolbox.parse_arguments(
+            "request_clarification",
+            {"question": "https://example.com"},
+        )
+    assert PLANNER_TOOL_REGISTRY["submit_draft"].output_schema is None
 
 
 async def test_ambiguous_destination_is_bounded_and_cannot_be_searched() -> None:
@@ -200,7 +214,10 @@ async def test_search_is_scoped_deduplicated_and_cached() -> None:
         ("architecture museum in Tokyo, Japan", 1),
     ]
     assert toolbox.tool_call_count == 3
-    assert toolbox.place_search_count == 3
+    assert toolbox.destination_resolution_count == 1
+    assert toolbox.place_search_count == 2
+    assert toolbox.ready_to_submit
+    assert toolbox.places_available
     assert set(toolbox.discovered_places) == {"tokyo", "museum", "park"}
 
     with pytest.raises(PlannerToolArgumentsError):
@@ -266,7 +283,10 @@ async def test_tool_and_search_limits_apply_after_cached_results() -> None:
     tokyo = _place("tokyo", "Tokyo")
     other = _place("other", "Other Known Place")
     places = _FakePlaces(
-        searches=[PlacesSearchResult(status="available", places=[tokyo])],
+        searches=[
+            PlacesSearchResult(status="available", places=[tokyo]),
+            PlacesSearchResult(status="available", places=[tokyo]),
+        ],
         details={
             "tokyo": PlaceDetailsResult(status="available", place=tokyo),
             "other": PlaceDetailsResult(status="available", place=other),
@@ -275,14 +295,25 @@ async def test_tool_and_search_limits_apply_after_cached_results() -> None:
     toolbox = _toolbox(
         places,
         known_places=[other],
-        limits=PlannerToolLimits(max_tool_calls=2, max_place_searches=1),
+        limits=PlannerToolLimits(
+            max_tool_calls=3,
+            max_destination_resolutions=1,
+            max_place_searches=1,
+        ),
     )
 
     await toolbox.execute("resolve_destination", {"query": "Tokyo"})
+    await toolbox.execute(
+        "search_places",
+        {"area_place_id": "tokyo", "category": "park"},
+    )
     with pytest.raises(PlannerToolLimitError, match="search limit"):
         await toolbox.execute(
             "search_places",
-            {"area_place_id": "tokyo", "category": "park"},
+            {
+                "area_place_id": "tokyo",
+                "category": "museum",
+            },
         )
 
     details = await toolbox.execute(
@@ -294,7 +325,7 @@ async def test_tool_and_search_limits_apply_after_cached_results() -> None:
         {"place_id": "tokyo"},
     )
     assert details == cached
-    assert toolbox.tool_call_count == 2
+    assert toolbox.tool_call_count == 3
     assert places.detail_calls == ["tokyo"]
 
     with pytest.raises(PlannerToolLimitError, match="tool call limit"):

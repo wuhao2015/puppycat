@@ -5,10 +5,10 @@ import logging
 import re
 import time
 from collections.abc import AsyncGenerator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
-from typing import Literal, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 
 import httpx
 from google import genai
@@ -80,6 +80,39 @@ ResponseModel = TypeVar("ResponseModel", bound=BaseModel)
 class GeminiMessage:
     role: Literal["system", "user", "assistant"]
     content: str
+
+
+@dataclass(frozen=True)
+class GeminiFunctionDefinition:
+    name: str
+    description: str
+    parameters: dict[str, object]
+
+
+@dataclass(frozen=True)
+class GeminiFunctionCall:
+    name: str
+    arguments: dict[str, Any]
+    call_id: str | None = None
+
+
+@dataclass(frozen=True)
+class GeminiFunctionResult:
+    name: str
+    response: dict[str, Any]
+    call_id: str | None = None
+
+
+@dataclass(frozen=True)
+class GeminiFunctionTurn:
+    calls: tuple[GeminiFunctionCall, ...]
+    model_content: object | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class GeminiFunctionExchange:
+    turn: GeminiFunctionTurn
+    results: tuple[GeminiFunctionResult, ...]
 
 
 class _ModelState(BaseModel):
@@ -177,6 +210,61 @@ class GeminiClient:
                 result = _parse_structured_response(response, response_schema)
                 await self._promote_model(model)
                 return cast(ResponseModel, result)
+            except Exception as error:
+                if _is_fallback_error(error):
+                    self._cool_down(model, error)
+                    continue
+                request_error = _request_error(error)
+                if request_error is error:
+                    raise
+                raise request_error from error
+
+        raise GeminiUnavailableError(attempted_models)
+
+    async def complete_function_turn(
+        self,
+        messages: Sequence[GeminiMessage],
+        functions: Sequence[GeminiFunctionDefinition],
+        exchanges: Sequence[GeminiFunctionExchange] = (),
+    ) -> GeminiFunctionTurn:
+        if not functions:
+            raise ValueError("At least one Gemini function is required")
+
+        sdk = self._require_sdk()
+        contents, system_instruction = _prepare_function_messages(
+            messages,
+            exchanges,
+        )
+        declarations = [
+            types.FunctionDeclaration(
+                name=function.name,
+                description=function.description,
+                parameters_json_schema=function.parameters,
+            )
+            for function in functions
+        ]
+        await self._ensure_catalog_current()
+        attempted_models: list[str] = []
+
+        for model in self._available_models():
+            attempted_models.append(model)
+            config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=[types.Tool(function_declarations=declarations)],
+                automatic_function_calling=types.AutomaticFunctionCallingConfig(
+                    disable=True
+                ),
+            )
+            try:
+                response = await sdk.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=config,
+                )
+                _raise_if_safety_blocked(response)
+                turn = _parse_function_turn(response)
+                await self._promote_model(model)
+                return turn
             except Exception as error:
                 if _is_fallback_error(error):
                     self._cool_down(model, error)
@@ -354,6 +442,47 @@ def _prepare_messages(
     return contents, "\n\n".join(system_parts) or None
 
 
+def _prepare_function_messages(
+    messages: Sequence[GeminiMessage],
+    exchanges: Sequence[GeminiFunctionExchange],
+) -> tuple[list[types.Content], str | None]:
+    contents, system_instruction = _prepare_messages(messages)
+    for exchange in exchanges:
+        if isinstance(exchange.turn.model_content, types.Content):
+            model_content = exchange.turn.model_content
+        else:
+            model_content = types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id=call.call_id,
+                            name=call.name,
+                            args=call.arguments,
+                        )
+                    )
+                    for call in exchange.turn.calls
+                ],
+            )
+        contents.append(model_content)
+        contents.append(
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            id=result.call_id,
+                            name=result.name,
+                            response=result.response,
+                        )
+                    )
+                    for result in exchange.results
+                ],
+            )
+        )
+    return contents, system_instruction
+
+
 def _eligible_model_name(model: types.Model) -> str | None:
     if not model.name:
         return None
@@ -430,6 +559,40 @@ def _parse_structured_response(
         raise _RetryableModelOutputError(
             "Gemini returned invalid structured output"
         ) from error
+
+
+def _parse_function_turn(
+    response: types.GenerateContentResponse,
+) -> GeminiFunctionTurn:
+    candidates = response.candidates or []
+    content = candidates[0].content if candidates else None
+    parts = content.parts if content is not None else None
+    calls: list[GeminiFunctionCall] = []
+    for part in parts or []:
+        function_call = part.function_call
+        if function_call is None:
+            continue
+        if not function_call.name:
+            raise _RetryableModelOutputError(
+                "Gemini returned a function call without a name"
+            )
+        arguments = function_call.args or {}
+        if not isinstance(arguments, dict):
+            raise _RetryableModelOutputError(
+                "Gemini returned invalid function arguments"
+            )
+        calls.append(
+            GeminiFunctionCall(
+                name=function_call.name,
+                arguments=dict(arguments),
+                call_id=function_call.id,
+            )
+        )
+    if not calls:
+        raise _RetryableModelOutputError(
+            "Gemini must call a Planner function"
+        )
+    return GeminiFunctionTurn(calls=tuple(calls), model_content=content)
 
 
 def _raise_if_safety_blocked(response: types.GenerateContentResponse) -> None:

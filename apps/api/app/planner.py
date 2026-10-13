@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
@@ -18,12 +19,24 @@ from app.external.places import Place, PlacesSearchResult
 from app.gemini import GeminiMessage
 from app.models import Itinerary as ItineraryRecord
 from app.models import Trip
-from app.schemas import ChatMessage, Itinerary, TripRequest
+from app.planner_agent import (
+    PlannerDraftEvaluation,
+    PlannerProgress,
+    run_planner_agent,
+)
+from app.schemas import (
+    ChatMessage,
+    Itinerary,
+    PlanGenerationStage,
+    TripRequest,
+)
 from app.verification import known_places, verify_itinerary
 
 
 EXTRACTION_PROMPT = """Extract the complete travel request from the supplied trip data and conversation.
 Use ISO dates. Return null for a destination or date that the user has not supplied.
+Set destination to the complete user-facing destination summary. Put each distinct
+city, region, or country that must be resolved separately in destination_facts.
 Preferences must not repeat destination or dates. Never invent missing facts."""
 
 DRAFT_PROMPT = """Create a practical daily itinerary matching the supplied request.
@@ -35,6 +48,14 @@ will stay overnight. Set intercity_transport only when travelling between
 overnight cities; otherwise return null. Do not invent verification results,
 warnings, place details, coordinates, weather, or source status; those are added
 by the server."""
+
+
+@dataclass(frozen=True)
+class PlanGenerationResult:
+    itinerary: ItineraryRecord | None
+    clarification_question: str | None
+    step_count: int
+    tool_call_count: int
 
 
 async def latest_itinerary(
@@ -55,7 +76,8 @@ async def generate_plan(
     clients: AppClients,
     through: datetime | None = None,
     previous_input_message_ts: datetime | None = None,
-) -> ItineraryRecord:
+    progress: PlannerProgress | None = None,
+) -> PlanGenerationResult:
     previous = await latest_itinerary(session, trip.id)
     conversation = _messages_through(trip.chat_messages or [], through)
     messages_since = (
@@ -84,99 +106,97 @@ async def generate_plan(
         ),
         TripRequest,
     )
-    _validate_request(extracted)
+    async def report_progress(
+        stage: PlanGenerationStage,
+        step_count: int,
+        tool_call_count: int,
+    ) -> None:
+        if progress is not None:
+            await progress(stage, step_count, tool_call_count)
 
-    destination = extracted.destination
-    start_date = extracted.start_date
-    end_date = extracted.end_date
-    assert destination is not None
-    assert start_date is not None
-    assert end_date is not None
-
-    destination_result, candidates_result = await asyncio.gather(
-        clients.places.search_text(destination, max_results=1),
-        clients.places.search_text(
-            f"top attractions restaurants and activities in {destination}",
-            max_results=20,
-        ),
+    existing_places = (
+        known_places(previous_data) if previous_data is not None else {}
     )
-    candidates = _candidate_places(destination_result, candidates_result)
-    if previous_data is not None:
-        candidates = _merge_places(
-            candidates,
-            list(known_places(previous_data).values()),
+
+    async def evaluate_draft(
+        draft: Itinerary,
+        candidate_ids: set[str],
+        places_available: bool,
+        step_count: int,
+        tool_call_count: int,
+    ) -> PlannerDraftEvaluation:
+        await report_progress("drafting", step_count, tool_call_count)
+        try:
+            prepared = await _prepare_draft(
+                draft,
+                request=extracted,
+                candidate_ids=candidate_ids,
+                clients=clients,
+            )
+        except ItineraryGenerationError:
+            return PlannerDraftEvaluation(
+                itinerary=None,
+                rejection_message=(
+                    "The draft does not match the trip facts or allowed places"
+                ),
+            )
+        await report_progress("verifying", step_count, tool_call_count)
+        verification = await verify_itinerary(
+            prepared,
+            clients=clients,
+            places_available=places_available,
+            known_places=existing_places,
         )
+        if verification.blocker_place_ids:
+            return PlannerDraftEvaluation(
+                itinerary=None,
+                rejection_message=(
+                    "Replace every closed or missing place before resubmitting"
+                ),
+                blocker_place_ids=tuple(sorted(verification.blocker_place_ids)),
+            )
+        return PlannerDraftEvaluation(itinerary=verification.itinerary)
 
-    draft = await clients.gemini.complete_json(
-        _draft_messages(
-            extracted,
-            candidates,
-            previous_data=previous_data,
-            new_user_messages=new_user_messages,
-        ),
-        Itinerary,
-    )
-    draft = await _prepare_draft(
-        draft,
+    agent_result = await run_planner_agent(
+        clients=clients,
         request=extracted,
-        candidate_ids={place.place_id for place in candidates},
-        clients=clients,
-    )
-    existing_places = known_places(previous_data) if previous_data is not None else {}
-    result = await verify_itinerary(
-        draft,
-        clients=clients,
-        places_available=(
-            destination_result.status == "available"
-            and candidates_result.status == "available"
-        ),
-        known_places=existing_places,
+        previous_itinerary=previous_data,
+        new_user_messages=new_user_messages,
+        progress=report_progress,
+        evaluate_draft=evaluate_draft,
     )
 
-    if result.blocker_place_ids:
-        replacement = await clients.gemini.complete_json(
-            _replacement_messages(
-                result.itinerary,
-                result.blocker_place_ids,
-                candidates,
-            ),
-            Itinerary,
+    if agent_result.clarification_question is not None:
+        return PlanGenerationResult(
+            itinerary=None,
+            clarification_question=agent_result.clarification_question,
+            step_count=agent_result.step_count,
+            tool_call_count=agent_result.tool_call_count,
         )
-        replacement = await _prepare_draft(
-            replacement,
-            request=extracted,
-            candidate_ids={place.place_id for place in candidates}
-            - result.blocker_place_ids,
-            clients=clients,
-        )
-        reusable = known_places(result.itinerary)
-        for place_id in result.blocker_place_ids:
-            reusable.pop(place_id, None)
-        result = await verify_itinerary(
-            replacement,
-            clients=clients,
-            places_available=(
-                destination_result.status == "available"
-                and candidates_result.status == "available"
-            ),
-            known_places=reusable,
-            reuse_global_from=result.itinerary,
-        )
-        if result.blocker_place_ids:
-            raise ItineraryGenerationError()
 
-    trip.destination = destination
-    trip.start_date = start_date
-    trip.end_date = end_date
+    draft = agent_result.draft
+    assert draft is not None
+
+    assert extracted.destination is not None
+    assert extracted.start_date is not None
+    assert extracted.end_date is not None
+    trip.destination = extracted.destination
+    trip.start_date = extracted.start_date
+    trip.end_date = extracted.end_date
     trip.preferences = extracted.preferences()
     record = ItineraryRecord(
         trip_id=trip.id,
-        data=result.itinerary.model_dump(mode="json"),
+        data=draft.model_dump(mode="json"),
     )
     session.add(record)
     await session.flush()
     await session.refresh(record)
-    return record
+    return PlanGenerationResult(
+        itinerary=record,
+        clarification_question=None,
+        step_count=agent_result.step_count,
+        tool_call_count=agent_result.tool_call_count,
+    )
 
 
 def _messages_through(

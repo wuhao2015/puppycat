@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from google.genai import errors
+from google.genai import errors, types
 from pydantic import BaseModel
 
 from app.db import cache_get
@@ -15,7 +15,16 @@ from app.errors import (
     GeminiSafetyError,
     GeminiStreamInterruptedError,
 )
-from app.gemini import GeminiClient, GeminiMessage, MODEL_STATE_CACHE_KEY
+from app.gemini import (
+    MODEL_STATE_CACHE_KEY,
+    GeminiClient,
+    GeminiFunctionCall,
+    GeminiFunctionDefinition,
+    GeminiFunctionExchange,
+    GeminiFunctionResult,
+    GeminiFunctionTurn,
+    GeminiMessage,
+)
 
 
 PRIMARY_MODEL = "gemini-2.5-flash"
@@ -31,6 +40,7 @@ def _response(
     parsed: object | None = None,
     text: str | None = None,
     block_reason: str | None = None,
+    content: types.Content | None = None,
 ) -> SimpleNamespace:
     feedback = (
         SimpleNamespace(block_reason=block_reason)
@@ -41,7 +51,11 @@ def _response(
         parsed=parsed,
         text=text,
         prompt_feedback=feedback,
-        candidates=[],
+        candidates=(
+            [SimpleNamespace(content=content, finish_reason="STOP")]
+            if content is not None
+            else []
+        ),
     )
 
 
@@ -194,6 +208,88 @@ async def test_retryable_error_falls_back_promotes_and_persists(
         BACKUP_MODEL,
         BACKUP_MODEL,
     ]
+
+
+async def test_function_turn_sends_declarations_and_prior_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_content = types.Content(
+        role="model",
+        parts=[
+            types.Part(
+                function_call=types.FunctionCall(
+                    id="call-2",
+                    name="search_places",
+                    args={"area_place_id": "tokyo", "category": "park"},
+                )
+            )
+        ],
+    )
+    client, models = _make_client(
+        monkeypatch,
+        completions={PRIMARY_MODEL: [_response(content=response_content)]},
+    )
+    previous = GeminiFunctionTurn(
+        calls=(
+            GeminiFunctionCall(
+                name="resolve_destination",
+                arguments={"query": "Tokyo"},
+                call_id="call-1",
+            ),
+        )
+    )
+    exchanges = [
+        GeminiFunctionExchange(
+            turn=previous,
+            results=(
+                GeminiFunctionResult(
+                    name="resolve_destination",
+                    call_id="call-1",
+                    response={"output": {"status": "available"}},
+                ),
+            ),
+        )
+    ]
+
+    turn = await client.complete_function_turn(
+        _messages(),
+        [
+            GeminiFunctionDefinition(
+                name="search_places",
+                description="Search places",
+                parameters={
+                    "type": "object",
+                    "properties": {"area_place_id": {"type": "string"}},
+                    "required": ["area_place_id"],
+                },
+            )
+        ],
+        exchanges,
+    )
+
+    assert turn.calls == (
+        GeminiFunctionCall(
+            name="search_places",
+            arguments={"area_place_id": "tokyo", "category": "park"},
+            call_id="call-2",
+        ),
+    )
+    call = models.complete_calls[0]
+    assert call["config"].automatic_function_calling.disable is True
+    declaration = call["config"].tools[0].function_declarations[0]
+    assert declaration.name == "search_places"
+    assert [content.role for content in call["contents"]] == [
+        "user",
+        "model",
+        "user",
+        "model",
+        "user",
+    ]
+    function_response = call["contents"][-1].parts[0].function_response
+    assert function_response.id == "call-1"
+    assert function_response.response == {
+        "output": {"status": "available"}
+    }
 
 
 @pytest.mark.parametrize(

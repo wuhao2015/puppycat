@@ -91,6 +91,12 @@ class ItineraryGenerationError(PlanningError):
     public_message = "Puppycat could not create a valid itinerary"
 
 
+class AgentExecutionLimitError(PlanningError):
+    status_code = 502
+    error_code = "agent_execution_limit"
+    public_message = "Puppycat could not finish planning within the safety limits"
+
+
 class ItineraryNotFoundError(PlanningError):
     status_code = 404
     error_code = "itinerary_not_found"

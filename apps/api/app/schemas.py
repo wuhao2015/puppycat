@@ -134,6 +134,7 @@ class TripRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     destination: str | None = None
+    destination_facts: list[str] = Field(default_factory=list)
     start_date: date | None = None
     end_date: date | None = None
     interests: list[str] = Field(default_factory=list)
@@ -158,6 +159,25 @@ class TripRequest(BaseModel):
             if interest and interest not in normalized:
                 normalized.append(interest)
         return normalized
+
+    @field_validator("destination_facts")
+    @classmethod
+    def normalize_destination_facts(cls, values: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            destination = " ".join(value.split())
+            key = destination.casefold()
+            if destination and key not in seen:
+                normalized.append(destination)
+                seen.add(key)
+        return normalized
+
+    @model_validator(mode="after")
+    def default_destination_facts(self) -> Self:
+        if self.destination and not self.destination_facts:
+            self.destination_facts = [self.destination]
+        return self
 
     def preferences(self) -> dict[str, Any]:
         return self.model_dump(
@@ -299,6 +319,7 @@ class PlanGenerationResponse(BaseModel):
     status: Literal["queued", "running", "needs_input", "succeeded", "failed"]
     stage: PlanGenerationStage
     step_count: int
+    tool_call_count: int
     clarification_question: str | None
     error_code: str | None
     error_message: str | None
